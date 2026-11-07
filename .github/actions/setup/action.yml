@@ -1,0 +1,16 @@
+name: 🧰 Set up Node and install
+description: Installs pnpm, Node, and the frozen-lockfile dependency tree, the prelude every job that runs a pnpm script shares.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v6.1.0
+      with:
+        cache: true
+
+    - uses: actions/setup-node@v7.1.0
+      with:
+        node-version: "26"
+
+    - shell: bash
+      run: pnpm install --frozen-lockfile

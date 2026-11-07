@@ -1,0 +1,106 @@
+/*
+ * Weekly dependency updates, run by `.github/workflows/renovate.yml`.
+ *
+ * - Renovate only creates or updates a branch inside `schedule`, so a change
+ *   to this file never opens PRs midweek.
+ *
+ * - `test/formatter.test.zsh` guards formatter upgrades, which have corrupted
+ *   zsh before.
+ *
+ * - These PRs carry no changeset, as AGENTS.md says.
+ */
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  assignees: ["jjloneman"],
+
+  // Reads `chore(deps-dev): ⬆️ bump foo from 1.0.0 to 1.0.1`, per AGENTS.md.
+  commitMessageAction: "⬆️ bump",
+  commitMessageExtra: "from {{{currentVersion}}} to {{{newVersion}}}",
+  commitMessageTopic: "{{{depName}}}",
+
+  extends: ["config:recommended"],
+
+  // `renovate-version` in `renovate.yml` is a plain input no manager reads.
+  customManagers: [
+    {
+      customType: "regex",
+      datasourceTemplate: "npm",
+      depNameTemplate: "renovate",
+      managerFilePatterns: ["/^\\.github/workflows/renovate\\.yml$/"],
+      matchStrings: ["renovate-version: (?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+    },
+  ],
+
+  // A group bumps many things, so its subject names the group, not one version.
+  group: {
+    commitMessageExtra: "",
+    commitMessageTopic: "the {{{groupName}}} group",
+  },
+
+  // Opens no branch for an update until the moratorium below has passed.
+  internalChecksFilter: "strict",
+
+  // Applied by exact name, so a misspelled label is silently skipped.
+  labels: ["📦 dependencies"],
+
+  // The 7-day moratorium, matching `minimumReleaseAge` in `pnpm-workspace.yaml`.
+  minimumReleaseAge: "7 days",
+
+  packageRules: [
+    {
+      addLabels: ["🤖 ci"],
+      matchManagers: ["github-actions"],
+      semanticCommitScope: "actions",
+    },
+
+    // Majors stay ungrouped, so a breaking bump gets its own review.
+    {
+      groupName: "actions patch and minor",
+      groupSlug: "actions-patch-and-minor",
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch"],
+    },
+    {
+      groupName: "root patch and minor",
+      groupSlug: "root-patch-and-minor",
+      matchFileNames: ["package.json", "pnpm-lock.yaml"],
+      matchUpdateTypes: ["minor", "patch"],
+    },
+
+    /*
+     * Digest updates are off, as a re-pushed tag has no release timestamp.
+     *
+     * - The moratorium would hold its digest-only update forever.
+     *
+     * - A version bump brings its new digest anyway.
+     */
+    {
+      enabled: false,
+      matchUpdateTypes: ["digest"],
+    },
+  ],
+
+  // Commits go through the API, so they're signed and attributed to the App.
+  platformCommit: "enabled",
+
+  // No cap: grouping, not throttling, keeps the PR count down.
+  prConcurrentLimit: 0,
+  prHourlyLimit: 0,
+
+  // Sunday 6:00 to 8:59am; `renovate.yml`'s cron fires inside it, at 6:15.
+  schedule: ["* 6-8 * * SUN"],
+
+  semanticCommits: "enabled",
+  semanticCommitScope: "deps-dev",
+  semanticCommitType: "chore",
+  timezone: "America/New_York",
+
+  /*
+   * No separate security PRs, as a fix arrives in the weekly updates instead.
+   *
+   * - Renovate's security updates skip `minimumReleaseAge`.
+   *
+   * - GitHub's alerts still flag a vulnerable version meanwhile.
+   */
+  vulnerabilityAlerts: { enabled: false },
+}
