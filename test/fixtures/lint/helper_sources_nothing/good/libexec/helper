@@ -1,0 +1,9 @@
+#!/bin/zsh -f
+emulate -R zsh
+setopt no_short_loops no_unset pipe_fail typeset_silent \
+  warn_create_global warn_nested_var
+unset CDPATH
+path=(/usr/bin /bin /usr/sbin /sbin)
+hash -r
+
+print -r -- "source this"

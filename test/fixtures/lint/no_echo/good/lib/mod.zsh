@@ -1,0 +1,1 @@
+print -r -- "echo hello"

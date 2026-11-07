@@ -1,0 +1,1 @@
+yes |& grep -q y

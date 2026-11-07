@@ -1,0 +1,37 @@
+{
+  "name": "pam-duo-macos-updater",
+  "version": "0.0.0",
+  "private": true,
+  "description": "🔐 Keeps a self-built Duo PAM module patched on macOS, with a two-approval proof and rollback. Unofficial.",
+  "homepage": "https://github.com/jjloneman/pam-duo-macos-updater#readme",
+  "bugs": {
+    "url": "https://github.com/jjloneman/pam-duo-macos-updater/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jjloneman/pam-duo-macos-updater.git"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "JJ Loneman",
+    "url": "https://github.com/jjloneman"
+  },
+  "type": "module",
+  "scripts": {
+    "changeset": "changeset",
+    "check": "pnpm format && pnpm lint && pnpm test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "/bin/zsh -f scripts/lint.zsh",
+    "prepare": "git config --local --get core.hooksPath >/dev/null || git config core.hooksPath .githooks || true",
+    "test": "/bin/zsh -f scripts/test.zsh"
+  },
+  "devDependencies": {
+    "@changesets/cli": "3.0.3",
+    "@changesets/config": "4.0.1",
+    "prettier": "3.9.10",
+    "prettier-plugin-sh": "0.20.2",
+    "sh-syntax": "0.7.0"
+  },
+  "packageManager": "pnpm@12.5.1"
+}
