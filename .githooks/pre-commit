@@ -1,0 +1,292 @@
+#!/bin/zsh -f
+emulate -R zsh
+setopt no_short_loops no_unset pipe_fail typeset_silent \
+  warn_create_global warn_nested_var
+unset CDPATH
+
+# Keeps the caller's PATH, as pnpm isn't on the pinned one.
+typeset -gr CALLER_PATH="${PATH}"
+path=(/usr/bin /bin /usr/sbin /sbin)
+hash -r
+
+# Formats what's staged, then lints exactly what will be committed.
+#
+# - Each guard below names the failure it prevents, found in code review and
+#   reproduced before it was fixed.
+#
+# - Each also says how it's verified: "tested" means test/pre-commit.test.zsh
+#   covers it, and "probed" means only a one-off check showed it working.
+#
+# - `pnpm install` turns these hooks on only if this clone has no
+#   `core.hooksPath` of its own, so a contributor's hooks folder survives.
+
+# Makes every file name passed to git a literal name, not a pattern. Tested.
+#
+# - Without this, a staged `[a].md` also matched `a.md` in `git diff` and
+#   `git add`, so a.md's unstaged, unfinished work was staged into the commit.
+typeset -gx GIT_LITERAL_PATHSPECS=1
+
+typeset -g EXPORT_ROOT
+
+# Refuses a staged file that also has unstaged changes. Tested.
+#
+# - Formatting reads the working tree, so re-staging a partly staged file
+#   would sweep its unstaged, unfinished hunks into the commit.
+are_fully_staged() {
+  local staged_file
+  local -i is_clean=1
+
+  for staged_file in "${staged_files[@]}"; do
+    if ((${unstaged_files[(Ie)${staged_file}]})); then
+      print -r -- "${staged_file} has unstaged changes" >&2
+      is_clean=0
+    fi
+  done
+
+  if ((is_clean)); then
+    return 0
+  fi
+
+  print -r -- "stage all of each file, or stash the rest, then retry" >&2
+  return 1
+}
+
+# Formats the staged files, and re-stages the ones it rewrote. Tested.
+#
+# - Every staged file was fully staged beforehand, so `git diff` afterward
+#   lists exactly what the formatter changed, with no per-file hashing.
+#
+# - If the formatter fails partway, it may already have rewritten some files,
+#   which would then look like unstaged work on the next try, so they're named.
+format_and_restage() {
+  local -a rewritten_files
+  local rewritten_file rewritten_output
+  local -i format_status
+
+  /usr/bin/env PATH="${CALLER_PATH}" pnpm exec prettier --ignore-unknown \
+    --write -- "${staged_files[@]}"
+  format_status="$?"
+
+  # A failed `git diff` would look like nothing changed, so it stops. Probed.
+  if ! rewritten_output="$(git diff --name-only -z -- \
+    "${staged_files[@]}")"; then
+    return 1
+  fi
+
+  rewritten_files=(${(0)rewritten_output})
+
+  if ((format_status != 0)); then
+    if ((${#rewritten_files} > 0)); then
+      print -r -- "the formatter failed after rewriting these, so review" \
+        "and stage them: ${rewritten_files[*]}" >&2
+    fi
+
+    return 1
+  fi
+
+  for rewritten_file in "${rewritten_files[@]}"; do
+    if ! restage_file "${rewritten_file}"; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+# Reports whether this is `git commit -- <path>`, which uses a temporary index.
+#
+# - Only this mode names its index file `next-index-*`, as seen on git 2.56.
+#
+# - `:t` compares the file name alone. Matching the whole path also caught a
+#   repo inside a folder whose name starts with `next-index-`. Probed.
+is_partial_commit() {
+  if [[ ${GIT_INDEX_FILE:-} == "" ]]; then
+    return 1
+  fi
+
+  if [[ ${GIT_INDEX_FILE:t} == next-index-* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Lints an export of the index, which is exactly what will be committed.
+#
+# - Linting the working tree let an unstaged edit elsewhere block an unrelated
+#   commit, and let an unstaged fix hide a problem in the staged content.
+#   Tested.
+#
+# - It refuses with a clear message when lint itself isn't staged, rather than
+#   failing with zsh's bare "can't open input file". Tested.
+#
+# - `--ignore-skip-worktree-bits` keeps files a sparse checkout hides, which
+#   would otherwise be left out of what lint checks. Probed.
+#
+# - pre-push exports the same way, through an index and `checkout-index`.
+#   The two once used different methods, and pre-push's honored export-ignore.
+lint_index() {
+  local index_copy="${EXPORT_ROOT}/index"
+
+  if ! git checkout-index --all --ignore-skip-worktree-bits \
+    --prefix="${index_copy}/"; then
+    return 1
+  fi
+
+  if [[ ! -f ${index_copy}/scripts/lint.zsh ]]; then
+    print -r -- "the index has no scripts/lint.zsh, so stage it too" >&2
+    return 1
+  fi
+
+  /bin/zsh -f "${index_copy}/scripts/lint.zsh"
+  return "$?"
+}
+
+# Refuses partly staged files, then formats what's staged.
+#
+# - `-z` keeps every path exact, including non-ASCII and unusual names, and
+#   `(0)` splits on its NULs, giving no item for empty output.
+#
+# - Each `git diff` is checked, because a failed one would look like nothing
+#   staged, and the hook would then pass without checking anything. Probed.
+prepare_staged_files() {
+  local -a staged_files unstaged_files
+  local staged_output unstaged_output
+
+  if ! staged_output="$(read_staged_regular_files)"; then
+    return 1
+  fi
+
+  staged_files=(${(0)staged_output})
+
+  if ! unstaged_output="$(git diff --name-only -z)"; then
+    return 1
+  fi
+
+  unstaged_files=(${(0)unstaged_output})
+
+  if ((${#staged_files} == 0)); then
+    return 0
+  fi
+
+  if ! are_fully_staged; then
+    return 1
+  fi
+
+  format_and_restage
+  return "$?"
+}
+
+# Prints the staged regular files, NUL-separated, by their new mode. Tested.
+#
+# - A symlink passed to `prettier --write` by name made it exit 2, so every
+#   commit adding one was refused, and a submodule's folder would have been
+#   walked and its files rewritten. Only modes 100644 and 100755 are kept.
+#
+# - `--raw -z` gives `:old new old-sha new-sha status`, then one path, or two
+#   for a rename or copy, of which the second is the new one.
+read_staged_regular_files() {
+  local -a raw_fields
+  local raw_output new_mode
+  local -i index=1
+
+  if ! raw_output="$(git diff --cached --raw -z --diff-filter=ACMR)"; then
+    return 1
+  fi
+
+  raw_fields=(${(0)raw_output})
+
+  while ((index <= ${#raw_fields})); do
+    new_mode="${${(z)raw_fields[index]}[2]}"
+
+    if [[ ${${(z)raw_fields[index]}[5]} == [RC]* ]]; then
+      index=$((index + 1))
+    fi
+
+    index=$((index + 1))
+
+    if [[ ${new_mode} == 100(644|755) ]]; then
+      print -rN -- "${raw_fields[index]}"
+    fi
+
+    index=$((index + 1))
+  done
+
+  return 0
+}
+
+# Removes the exported index.
+remove_exports() {
+  rm -rf -- "${EXPORT_ROOT:?}"
+  return 0
+}
+
+# Stages a reformatted file, unless a partial commit would leave it half-staged.
+#
+# - In `git commit -- <path>`, re-staging only updates the temporary index, so
+#   the file was left modified in both the index and the tree. Asking for a
+#   retry instead ends with a clean file. Tested.
+#
+# - A failed `git add`, such as from another git process holding the index
+#   lock, used to be ignored, so the unformatted file was committed. Tested.
+restage_file() {
+  if ((${#} != 1)); then
+    print -r -- "restage_file needs a path" >&2
+    return 2
+  fi
+
+  if is_partial_commit; then
+    print -r -- "${1} was reformatted, so commit it again" >&2
+    return 1
+  fi
+
+  if ! git add -- "${1}"; then
+    print -r -- "could not re-stage ${1}" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Checks what's staged, formats it, then lints the result.
+#
+# - A commit that only deletes files used to skip lint, as no file was left to
+#   format, so `git rm` of a file lint needs went through. Any staged change
+#   now reaches lint_index. Tested.
+main() {
+  local -i diff_status
+
+  git diff --cached --quiet
+  diff_status="$?"
+
+  if ((diff_status == 0)); then
+    return 0
+  fi
+
+  if ((diff_status != 1)); then
+    return 1
+  fi
+
+  if ! prepare_staged_files; then
+    return 1
+  fi
+
+  lint_index
+  return "$?"
+}
+
+# A named template, because macOS `mktemp -d` ignores TMPDIR without one.
+if ! EXPORT_ROOT="$(mktemp -d "${${TMPDIR:-/tmp}%/}/pre-commit.XXXXXX")"; then
+  print -r -- "could not make a temporary folder" >&2
+  exit 1
+fi
+
+# EXIT removes the export, and zsh skips EXIT on a signal unless the signal's
+# own trap exits, so a killed hook used to leave a full copy of the index.
+# Tested for TERM; HUP and INT use the same mechanism.
+trap remove_exports EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+main "$@"
+exit "$?"

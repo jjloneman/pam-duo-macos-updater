@@ -1,0 +1,3 @@
+local multi="$(
+  false
+)"

@@ -1,0 +1,12 @@
+# Supply-chain floor: refuse to install any version younger than 7 days, giving
+# the registry time to yank a compromised release before it reaches the
+# lockfile.
+#
+# - Overrides pnpm's built-in 1-day default.
+#
+# - Value is in minutes.
+minimumReleaseAge: 10080
+
+# Write exact versions on `pnpm add`, so the lockfile is the only thing that
+# moves a dependency.
+saveExact: true

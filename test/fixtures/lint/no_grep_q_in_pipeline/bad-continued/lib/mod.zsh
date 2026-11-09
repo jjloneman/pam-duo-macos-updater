@@ -1,0 +1,3 @@
+yes \
+  | grep \
+  -q y

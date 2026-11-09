@@ -1,0 +1,51 @@
+name: 🚀 Release
+
+on:
+  push:
+    branches: [main]
+
+# Queue rather than cancel: a cancelled run could be the one on the version
+# PR's merge commit, which is the run that tags.
+concurrency:
+  cancel-in-progress: false
+  group: ${{ github.workflow }}
+
+# Nothing by default; each job grants only what it uses.
+permissions: {}
+
+jobs:
+  release:
+    name: 🏷️ Version PR or tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # changesets/action pushes through the API with `github-token`, so no
+      # write token needs to sit on disk during the install.
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+
+      # Does one of two things, depending on what's pending.
+      #
+      # - With pending changesets, it opens or updates the rolling version PR.
+      #
+      # - With none, as when that PR was just merged, it tags the version and
+      #   creates a GitHub release. The package is private, so nothing reaches
+      #   npm.
+      - id: changesets
+        uses: changesets/action@v2.1.2
+        with:
+          commit-message: "chore(release): 🚀 version packages"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-title: "chore(release): 🚀 version packages"
+          publish-script: pnpm changeset publish
+
+      # changesets/action has no assignee or label option, so add them here.
+      - if: ${{ steps.changesets.outputs.pr-number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.changesets.outputs.pr-number }}
+        run: gh pr edit "$PR_NUMBER" --add-assignee jjloneman --add-label "🚀 release" --repo "$GITHUB_REPOSITORY"

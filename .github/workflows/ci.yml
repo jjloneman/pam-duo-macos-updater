@@ -1,0 +1,49 @@
+name: ☁️ CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+# A PR that gets a second push has no use for the first push's verdict, so
+# supersede it. A `main` push is a record of that commit, never cancelled.
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+
+# Nothing by default; each job grants only what it uses.
+permissions: {}
+
+jobs:
+  check:
+    name: 🧪 Format, lint, and test
+    # The tool targets macOS and its /bin/zsh, so this can't run on Linux.
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's zsh may differ from the 5.9 the rules were tested on.
+      - run: /bin/zsh --version
+
+      - uses: ./.github/actions/setup
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm test
+
+  workflows:
+    name: 🤖 Lint workflows
+    # actionlint's Docker image needs Linux, and needs no checkout credentials.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color

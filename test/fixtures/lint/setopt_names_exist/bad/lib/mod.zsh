@@ -1,0 +1,1 @@
+setopt no_unset no_such_option

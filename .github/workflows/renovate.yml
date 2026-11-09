@@ -1,0 +1,64 @@
+name: ⬆️ Renovate
+
+# Weekly dependency updates, configured by `.github/renovate.json5`.
+#
+# - `workflow_dispatch` runs it on demand, e.g. after ticking a box on the
+#   Dependency Dashboard; outside the config's `schedule` window, a run only
+#   refreshes the dashboard.
+on:
+  schedule:
+    # Every Sunday at 6:15am New York time.
+    #
+    # - It must fall inside the config's `schedule`, Sunday 6:00 to 8:59am.
+    #
+    # - 6:15 rather than 6:00 because GitHub's scheduler is busiest on the
+    #   hour, when a queued run is more likely to be dropped.
+    - cron: "15 6 * * SUN"
+      timezone: "America/New_York"
+  workflow_dispatch: {}
+
+# Never cancel a run partway through pushing branches; queue the next instead.
+concurrency:
+  cancel-in-progress: false
+  group: ${{ github.workflow }}
+
+# Nothing by default; the App token does the writing.
+permissions: {}
+
+jobs:
+  renovate:
+    name: ⬆️ Renovate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # A PR opened with `GITHUB_TOKEN` starts no workflows, so Renovate acts
+      # as a GitHub App, whose PRs and pushes run CI.
+      - name: Mint the App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      # The Renovate version is pinned like every other dependency, at least
+      # 7 days old, since it runs with write access to the repo.
+      - name: Run Renovate
+        uses: renovatebot/github-action@v46.3.8
+        with:
+          renovate-version: 44.160.0
+          token: ${{ steps.app-token.outputs.token }}
+        env:
+          # Stops tag listings at page 10, which keeps the newest 1,000 tags.
+          #
+          # - Docker Hub refuses an anonymous listing past that, and Renovate
+          #   then drops every tag's push date, which the moratorium needs.
+          RENOVATE_DOCKER_MAX_PAGES: "10"
+
+          # Renovate tells its own commits from someone else's by author, so it
+          # needs the App's bot identity, or it stops rebasing its own PRs.
+          RENOVATE_GIT_AUTHOR: "jjloneman-renovate[bot] <346092702+jjloneman-renovate[bot]@users.noreply.github.com>"
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_REQUIRE_CONFIG: required
+          RENOVATE_USERNAME: "jjloneman-renovate[bot]"

@@ -1,0 +1,219 @@
+#!/bin/zsh -f
+emulate -R zsh
+setopt no_short_loops no_unset pipe_fail typeset_silent \
+  warn_create_global warn_nested_var
+unset CDPATH
+path=(/usr/bin /bin /usr/sbin /sbin)
+hash -r
+
+# Lints every commit being pushed, whatever the working tree holds.
+#
+# - git passes the remote's name and URL as arguments, then one
+#   `local-ref local-sha remote-ref remote-sha` line per ref on stdin.
+#
+# - Each guard below names the failure it prevents, found in code review and
+#   reproduced before it was fixed.
+#
+# - Each also says how it's verified: "tested" means test/pre-push.test.zsh
+#   covers it, and "probed" means only a one-off check showed it working.
+#
+# - Checking the working tree instead let a branch holding a `--no-verify`
+#   commit be pushed from a clean checkout, so pushed commits are exported.
+#   Tested.
+#
+# - Formatting and tests need node_modules at each commit, so CI runs them.
+
+typeset -gr ZERO_SHA=0000000000000000000000000000000000000000
+typeset -g EXPORT_ROOT
+
+# Exports one commit through a scratch index, lints it, then removes it.
+#
+# - Only a commit with no history of scripts/lint.zsh may skip lint. Checking
+#   the file alone let a commit that deletes it skip lint. Tested.
+#
+# - A failed `git log`, as in an offline partial clone, refuses the commit
+#   rather than reading as "predates lint". Probed.
+#
+# - `git archive` honors export-ignore, so a commit could hide any file from
+#   lint through its own .gitattributes. read-tree and checkout-index don't.
+#   Probed. pre-commit exports the same way, so both lint the same files.
+#
+# - Each export is removed after its lint, so a commit reached through two refs
+#   can never collide with its own earlier export. Tested.
+lint_commit() {
+  if ((${#} != 1)); then
+    print -r -- "lint_commit needs a commit" >&2
+    return 2
+  fi
+
+  local commit_copy="${EXPORT_ROOT}/${1}" lint_history
+  local -i lint_status
+
+  if ! lint_history="$(git log -1 --format=%H "${1}" -- scripts/lint.zsh)"; then
+    print -r -- "could not read the history of ${1}" >&2
+    return 1
+  fi
+
+  if [[ -z ${lint_history} ]]; then
+    print -r -- "skipping ${1}, which predates scripts/lint.zsh" >&2
+    return 0
+  fi
+
+  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git read-tree "${1}"; then
+    return 1
+  fi
+
+  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git checkout-index --all \
+    --prefix="${commit_copy}/"; then
+    return 1
+  fi
+
+  if [[ ! -f ${commit_copy}/scripts/lint.zsh ]]; then
+    print -r -- "${1} removes scripts/lint.zsh" >&2
+    rm -rf -- "${commit_copy:?}"
+    return 1
+  fi
+
+  /bin/zsh -f "${commit_copy}/scripts/lint.zsh"
+  lint_status="$?"
+  rm -rf -- "${commit_copy:?}"
+  return "${lint_status}"
+}
+
+# Lists commits the destination already holds, to leave out of the check.
+#
+# - `--remotes=<name>` only. Every remote's tracking refs let commits from a
+#   fork, pushed to origin as a new branch, skip lint. Tested.
+#
+# - `git ls-remote` adds tips the destination holds that this clone tracks no
+#   ref for, such as a bare URL, if this clone has those commits. Without it,
+#   a first push there linted all history CI had already checked. Tested.
+#
+# - A truly empty destination still gets every commit linted, as each is new
+#   there, which can take minutes for a long history.
+list_destination_tips() {
+  local remote_name="${1:-}" remote_url="${2:-}" tip_line tip_output
+
+  if [[ -n ${remote_name} ]]; then
+    print -r -- "--remotes=${remote_name}"
+  fi
+
+  if [[ -z ${remote_url} ]]; then
+    return 0
+  fi
+
+  # An unreachable remote still leaves the tracking refs above.
+  if ! tip_output="$(git ls-remote -- "${remote_url}" 2> /dev/null)"; then
+    return 0
+  fi
+
+  for tip_line in ${(f)tip_output}; do
+    if git cat-file -e "${tip_line%%[[:space:]]*}^{commit}" 2> /dev/null; then
+      print -r -- "${tip_line%%[[:space:]]*}"
+    fi
+  done
+
+  return 0
+}
+
+# Lists the commits this push adds to the destination.
+#
+# - Checking only each ref's tip let a bad commit through under a clean one.
+#   Tested.
+#
+# - A known remote tip bounds the range. A new ref, or a tip this clone
+#   doesn't have, counts every commit the destination doesn't hold. Tested.
+list_new_commits() {
+  if ((${#} != 2)); then
+    print -r -- "list_new_commits needs a local and a remote commit" >&2
+    return 2
+  fi
+
+  if [[ ${2} != "${ZERO_SHA}" ]]; then
+    if git cat-file -e "${2}^{commit}" 2> /dev/null; then
+      git rev-list "${1}" "^${2}"
+      return "$?"
+    fi
+  fi
+
+  git rev-list "${1}" --not "${DESTINATION_TIPS[@]}"
+  return "$?"
+}
+
+# Prints each new commit the pushed refs on stdin add, one per line.
+read_new_commits() {
+  local commit_output local_ref local_sha remote_ref remote_sha
+
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    # A deleted ref sends nothing.
+    if [[ ${local_sha} == "${ZERO_SHA}" ]]; then
+      continue
+    fi
+
+    if ! commit_output="$(list_new_commits "${local_sha}" \
+      "${remote_sha}")"; then
+      return 1
+    fi
+
+    print -r -- "${commit_output}"
+  done
+
+  return 0
+}
+
+# Removes the exported commits.
+remove_exports() {
+  rm -rf -- "${EXPORT_ROOT:?}"
+  return 0
+}
+
+# Reads every pushed ref, then lints each new commit once.
+#
+# - A branch and its tag, as `git push --follow-tags` sends, share commits.
+#   Linting per ref exported one commit twice, the second export failed, and
+#   a clean push was blocked, so commits are gathered into one set. Tested.
+main() {
+  local -a new_commits
+  local commit_output new_commit tips_output
+  local -i failed_commits=0
+
+  # Unquoted (f) drops empty lines, so no empty argument reaches rev-list.
+  tips_output="$(list_destination_tips "$@")"
+  typeset -ga DESTINATION_TIPS=(${(f)tips_output})
+
+  if ! commit_output="$(read_new_commits)"; then
+    return 1
+  fi
+
+  new_commits=(${(fu)commit_output})
+  print -r -- "pre-push: new commits to lint: ${#new_commits}" >&2
+
+  for new_commit in "${new_commits[@]}"; do
+    if ! lint_commit "${new_commit}"; then
+      print -r -- "${new_commit} failed lint" >&2
+      failed_commits=$((failed_commits + 1))
+    fi
+  done
+
+  if ((failed_commits > 0)); then
+    return 1
+  fi
+
+  return 0
+}
+
+# A named template, because macOS `mktemp -d` ignores TMPDIR without one.
+if ! EXPORT_ROOT="$(mktemp -d "${${TMPDIR:-/tmp}%/}/pre-push.XXXXXX")"; then
+  print -r -- "could not make a temporary folder" >&2
+  exit 1
+fi
+
+# EXIT removes the exports, and zsh skips EXIT on a signal unless the signal's
+# own trap exits, so a killed hook used to leave full copies of the commits.
+# Probed here; pre-commit's test covers the same mechanism.
+trap remove_exports EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+main "$@"
+exit "$?"
