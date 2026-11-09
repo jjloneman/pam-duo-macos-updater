@@ -4,7 +4,7 @@ title: Fixes found in review
 description: What six code reviews and the owner's review found wrong in this repo's lint and test tooling, what prevents each now, and how that's verified, so similar work can fail faster.
 tags: [linting, review, testing, zsh]
 status: draft
-generated: { by: claude-code, at: 2026-11-09T21:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-09T21:00:00Z }
 ---
 
 # Fixes found in review
