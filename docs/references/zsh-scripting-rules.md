@@ -2,6 +2,7 @@
 type: Reference
 title: Zsh scripting rules
 description: Every code and lint rule this repo uses for zsh, each marked Tested, Source or Inference with its date, plus which linters support zsh.
+tags: [linting, shell, zsh]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
 sources:
@@ -89,9 +90,11 @@ As of 2026-11-06. None of the third-party tools below were run for this record.
   - Not corrupted: `"$# args"`, `"${#}"`, `"a ${#} b"`, `(($# != 3))`, `[[ $# -eq 1 ]]`, `"$?"`, `"$@"`, `"$$"`, `"$!"`, `"$*"` and `"$#name"`.
   - Only these forms were tried.
 - **Why it's dangerous (Tested):** the corrupted result still passes `zsh -n`, and `"$"` prints a literal `$` instead of the count.
-- **The parser is incomplete too (Tested 2026-11-06):** it rejected `${~name}`, glob subscripts such as `${(k)a[(R)*x*]}`, and a `[[ ]]` alternation with escaped parentheses, all valid zsh. Those forms are rewritten, so no file is excluded from formatting.
+- **The parser is incomplete too (Tested 2026-11-06):** it rejected `${~name}`, glob subscripts such as `${(k)a[(R)*x*]}`, and a `[[ ]]` alternation with escaped parentheses, all valid zsh. Those forms are rewritten, so no file is excluded from formatting. `sh-syntax` 0.8.3 accepts the first two, and still rejects the third (Tested 2026-11-09).
 - **The rule:** the argument count is always `${#}`, and lint rejects the short form outside single quotes and comments. A fixture test catches a formatter upgrade bringing the bug back.
-- **Upstream:** shfmt had the same bug, closed in its 3.14.1 release [mvdan-sh-1405] [mvdan-sh]. Whether a later `sh-syntax` picks up the fix is unknown.
+- **Upstream:** shfmt had the same bug, closed in its 3.14.1 release [mvdan-sh-1405] [mvdan-sh].
+  - `sh-syntax` 0.8.3 no longer corrupts these forms (Tested 2026-11-09, calling `sh-syntax` directly).
+  - `prettier-plugin-sh` 0.20.2 still depends on `sh-syntax` `^0.7.0`, so it keeps the bug until it updates. Tracked in [issue 9](https://github.com/jjloneman/pam-duo-macos-updater/issues/9).
 
 ## Entry points
 

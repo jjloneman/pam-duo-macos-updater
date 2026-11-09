@@ -2,6 +2,7 @@
 type: Decision
 title: Why zsh
 description: It stays in zsh because root needs a root-owned shell that ships with macOS, a text helper can be reviewed, and runtime speed doesn't matter here.
+tags: [language-choice, macos, zsh]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
 ---

@@ -6,7 +6,7 @@ Thanks for your interest. This is one person's project that touches how `sudo` w
 
 - [🧰 Setup](#-setup)
 - [✅ Checks](#-checks)
-- [🌿 Pull requests](#-pull-requests)
+- [🔀 Pull requests](#-pull-requests)
 - [🧪 What tests can't prove](#-what-tests-cant-prove)
 - [🔒 Security problems](#-security-problems)
 
@@ -35,7 +35,7 @@ The code conventions and lint rules are in [AGENTS.md](AGENTS.md), with their ev
 - **The argument count is `${#}`.** The formatter corrupts the short form.
 - **A new lint rule needs a fixture,** a bad tree and a good one under `test/fixtures/lint/`.
 
-## 🌿 Pull requests
+## 🔀 Pull requests
 
 - **Titles** follow the [commit conventions](AGENTS.md#️-commit-conventions), because PRs are squash-merged.
 - **Add a changeset** with `pnpm changeset`, for the changelog.

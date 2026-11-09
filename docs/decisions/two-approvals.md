@@ -2,6 +2,7 @@
 type: Decision
 title: Why the install takes two approvals
 description: One approval starts the root helper and a second proves the new module approves sudo, with the old module restored if the proof doesn't pass.
+tags: [duo, pam, rollback, sudo]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
 sources:

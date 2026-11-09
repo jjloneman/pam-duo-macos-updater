@@ -1,6 +1,6 @@
 # 🔐 pam-duo-macos-updater
 
-Keeps a self-built Duo PAM module (`pam_duo`) patched on macOS, with a two-approval proof and rollback.
+Keeps a self-built [Duo](https://duo.com/docs/duounix) [PAM](https://en.wikipedia.org/wiki/Pluggable_authentication_module) module (`pam_duo`) patched on macOS, with a two-approval proof and rollback. New to these? See [what PAM and Duo are, and why this exists](#-what-pam-and-duo-are-and-why-this-exists).
 
 - **Unofficial:** this project is not affiliated with Duo or Cisco.
 - **Not ready for use yet:** as of 2026-11-06 the code hasn't been imported, so there's nothing to install or run.
@@ -9,6 +9,7 @@ Keeps a self-built Duo PAM module (`pam_duo`) patched on macOS, with a two-appro
 ## 📖 Table of contents
 
 - [🚨 Limits and risks](#-limits-and-risks)
+- [💡 What PAM and Duo are, and why this exists](#-what-pam-and-duo-are-and-why-this-exists)
 - [📦 Status](#-status)
 - [🧭 What the tool will do](#-what-the-tool-will-do)
 - [🧪 What has been tested](#-what-has-been-tested)
@@ -29,6 +30,18 @@ These describe the plan for the code arriving in [issue 2](https://github.com/jj
 - **Rollback isn't absolute.** A forced kill during the proof can skip the restore. The plan is to raise an alert from a leftover marker, not to promise recovery. Keep a root shell open while you're setting this up.
 - **It runs on one Mac so far.** Its results come from one owner's machine, and it isn't built for anyone else's yet. Other macOS security settings, including System Integrity Protection, weren't tried, so results may differ. A setup guide and an undo guide are planned in [issue 6](https://github.com/jjloneman/pam-duo-macos-updater/issues/6), which is optional.
 - **Nothing installs unattended, by design.** You need to be there, with your phone, for each install.
+
+## 💡 What PAM and Duo are, and why this exists
+
+- **PAM:** [Pluggable Authentication Modules](https://en.wikipedia.org/wiki/Pluggable_authentication_module) are the plug-ins macOS uses to decide whether a login or `sudo` is allowed. A file under `/etc/pam.d` lists which modules each service asks.
+- **Duo:** [Duo](https://duo.com/product/multi-factor-authentication-mfa) is Cisco's two-factor authentication service, which sends an approval to your phone. [Duo Unix](https://duo.com/docs/duounix) includes `pam_duo`, the module that lets PAM ask Duo.
+- **Together:** with `pam_duo` listed for `sudo`, you can approve `sudo` from your phone instead of typing your password.
+
+A setup like this is hard to keep safe by hand, which is the gap this tool fills:
+
+- **You have to build the module yourself.** Duo doesn't list macOS, and [Homebrew's copy depends on files your user can write](docs/decisions/build-from-source.md), which `sudo` shouldn't load.
+- **A self-built module doesn't update itself.** It carries its own OpenSSL, and nothing tells you when that or Duo Unix gets a security release.
+- **A bad replacement can lock you out of `sudo`,** which is what you'd need to fix it. So each install has to [prove the new module works](docs/decisions/two-approvals.md), and put the old one back if it doesn't.
 
 ## 📦 Status
 

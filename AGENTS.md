@@ -37,11 +37,20 @@ Planned, per issue 1: `bin/`, `lib/`, `libexec/`, and `scripts/coverage.zsh`.
 
 ### 🧨 Traps found while building this tooling
 
-- **`$0` inside a function is the function's name.** Capture paths at the top level. This once made the test runner find no tests and report success, so a runner must also fail on finding nothing.
-- **`[[:space:]]#` needs `extended_glob`,** which stays off. Use `trim_line` in `scripts/lint/scan.zsh`.
+- **`$0` inside a function is the function's name.** Capture paths at the top level, which lint enforces. This once made the test runner find no tests and report success, so a runner must also fail on finding nothing.
+- **`[[:space:]]#` needs `extended_glob`,** which stays off, and lint rejects it. Use `trim_line` in `scripts/lint/scan.zsh`.
+- **macOS `mktemp` ignores `TMPDIR` without a template,** so lint requires one.
+- **BSD `chmod` doesn't accept `--`,** unlike `rm`, `cp` and `mkdir`.
 - **`$'\n'` doesn't expand inside double quotes.** Put it in a constant.
 - **The formatter can't parse all valid zsh.** It rejected `${~name}`, glob subscripts such as `${(k)a[(R)*x*]}`, and some `[[ ]]` alternations with escaped parentheses. Rewrite the form, and never exclude the file.
 - **`warn_nested_var` fires on assigning a global from a function.** Use `typeset -g` on each assignment.
+
+## 🧾 Documenting fixes
+
+Future sessions should be able to fail faster than this one did.
+
+- **Document every fix,** in a comment beside the code, in [Fixes found in review](docs/decisions/review-fixes.md), or both. Say what failed, what prevents it now, and how that's verified.
+- **After each fix, ask whether a lint rule or a line here would make the mistake impossible,** and add one when it would. A check that can't be reliable belongs under "Left to review" instead.
 
 ## 🧹 Lint
 
@@ -64,7 +73,7 @@ Planned, per issue 1: `bin/`, `lib/`, `libexec/`, and `scripts/coverage.zsh`.
 - **`verified` needs the owner's approval,** either by editing the record themselves or by telling an agent to verify named records. Writing or editing a record never implies approval.
 - **Check a record's `verified` field** before changing the behavior it describes.
 - **Write records fresh for the public.** Mark each claim as tested, sourced or inferred, with a date.
-- **Every record** is listed in its bundle's `index.md`, which lint checks.
+- **Every record** has `tags` and is listed in its bundle's `index.md`, which lint checks.
 
 ## ✍️ Commit conventions
 
@@ -114,4 +123,5 @@ No dependency may enter the lockfile until it has been published for at least 7 
 
 ## 🛑 Deleting things
 
-Confirm with the owner before deleting anything the current task didn't create: files, branches, issues or remote state.
+- **Confirm with the owner before deleting anything the current task didn't create:** files, branches, issues or remote state.
+- **On a Mac, prefer `trash` over `rm` when deleting by hand,** so a mistake can be undone. The scripts' own cleanup of their temporary folders still uses `rm`, as `trash` isn't on CI or older Macs.

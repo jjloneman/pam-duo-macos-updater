@@ -2,6 +2,7 @@
 type: Decision
 title: Why it builds from source
 description: The module and its OpenSSL are compiled from source with root-owned paths built in, because Homebrew's copies depend on files the user can write.
+tags: [build, openssl, pam, security]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
 sources:
@@ -19,7 +20,7 @@ Nothing `sudo` loads may depend on a file the user can write, and Homebrew's `pa
 
 ## Decision
 
-This is the plan for the code arriving in issue 2, based on the setup it comes from.
+This is the plan for the code arriving in [issue 2](https://github.com/jjloneman/pam-duo-macos-updater/issues/2), based on the setup it comes from.
 
 - **Compile both from source:** a private, static OpenSSL, then `pam_duo` against it, both as the normal user.
 - **Build in only root-owned paths:** OpenSSL's prefix is `/usr/local/duo-openssl` and its config folder is `/etc/duo/ssl`.
