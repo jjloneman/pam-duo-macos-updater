@@ -15,7 +15,7 @@ permissions: {}
 
 jobs:
   release:
-    name: 🦋 Version PR or tag
+    name: 🏷️ Version PR or tag
     runs-on: ubuntu-latest
     permissions:
       contents: write
