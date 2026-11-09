@@ -1,7 +1,7 @@
 # Rules about the file as a whole, and about the repo.
 
 typeset -gr NEWLINE=$'\n'
-typeset -gra OKF_FIELDS=(description generated status title type)
+typeset -gra OKF_FIELDS=(description generated status tags title type)
 
 # Reports an entry-point file missing part of the standard header.
 check_header_part() {

@@ -40,6 +40,14 @@ rule_helper_sources_nothing() {
   return 0
 }
 
+# Requires a template, because macOS `mktemp` ignores TMPDIR without one.
+rule_mktemp_has_template() {
+  report_pattern mktemp_has_template statement \
+    '(^|[[:space:];(])mktemp([[:space:]]+-[a-zA-Z]+)*[[:space:]]*(\)|$)' \
+    'give mktemp a template, built from ${TMPDIR:-/tmp}'
+  return 0
+}
+
 # Rejects `$(...)` in a declaration, whose status is always 0.
 rule_no_assign_on_declare() {
   local keyword='(local|typeset|declare|float|integer|readonly|export|private)'
@@ -92,6 +100,17 @@ rule_no_function_keyword() {
   return 0
 }
 
+# Rejects `#` after a bracket class, which needs extended_glob, kept off.
+#
+# - Without it, `[[:space:]]#` matches a literal `#`, so the pattern silently
+#   fails. Subscripts such as `${a[1]#x}` are fine, so only classes count.
+rule_no_glob_repeat_hash() {
+  report_pattern no_glob_repeat_hash code \
+    '(:\]|[[:alnum:]]-[[:alnum:]])\]#' \
+    "this needs extended_glob; use a helper such as trim_line"
+  return 0
+}
+
 # Rejects `grep -q` in a pipeline, which pipe_fail turns into a false failure.
 rule_no_grep_q_in_pipeline() {
   local gap='[[:space:]]'
@@ -137,5 +156,16 @@ rule_no_single_bracket() {
 rule_read_uses_r() {
   report_pattern read_uses_r code '(^|[[:space:];&|(])read([[:space:]]|$)' \
     'use read -r' 'read[[:space:]]+(.*[[:space:]])?-[a-zA-Z]*r'
+  return 0
+}
+
+# Requires `cd` to be checked, as a failed one carries on in the wrong folder.
+#
+# - `cd -- ""` even succeeds and stays put, so a script needs to test the
+#   result. Only a statement that starts with `cd` is unchecked.
+rule_unchecked_cd() {
+  report_pattern unchecked_cd statement \
+    '(^|;|[[:space:]](then|do|else))[[:space:]]*cd([[:space:]]|$)' \
+    'use if ! cd -- "${path}"; then'
   return 0
 }

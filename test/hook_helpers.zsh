@@ -139,7 +139,7 @@ start_scratch() {
   unset "${git_variables[@]}"
   typeset -gx GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
-  if ! scratch_path="$(mktemp -d)"; then
+  if ! scratch_path="$(mktemp -d "${${TMPDIR:-/tmp}%/}/hook-test.XXXXXX")"; then
     abort_setup "mktemp failed"
   fi
 

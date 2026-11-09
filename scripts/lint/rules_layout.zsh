@@ -158,3 +158,23 @@ rule_line_width() {
 
   return 0
 }
+
+# Rejects `$0` in a function, where it's the function's name, not the script's.
+#
+# - A test runner once looked for its tests beside `${0:A:h}`, found none, and
+#   reported success. Capture the path at the top level instead.
+rule_no_argzero_in_function() {
+  local -i index last_row row
+
+  for ((index = 1; index <= ${#FUNCTION_STARTS}; index++)); do
+    last_row="${FUNCTION_ENDS[index]:-0}"
+
+    for ((row = FUNCTION_STARTS[index]; row <= last_row; row++)); do
+      if [[ ${EXPAND_LINES[row]:-} == *'${0'* ]]; then
+        report "${row}" no_argzero_in_function "capture it at the top level"
+      fi
+    done
+  done
+
+  return 0
+}

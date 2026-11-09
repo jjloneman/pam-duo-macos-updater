@@ -31,7 +31,7 @@ check_exit_codes() {
   lint_status="$?"
   expect_equal "--root with no directory exits 2" "2" "${lint_status}"
 
-  if ! probe_root="$(mktemp -d)"; then
+  if ! probe_root="$(mktemp -d "${${TMPDIR:-/tmp}%/}/lint-test.XXXXXX")"; then
     fail_check "the exit code checks need a folder" "mktemp failed"
     return 0
   fi
@@ -85,7 +85,7 @@ check_missing_rule_file() {
   local probe_root
   local -i lint_status
 
-  if ! probe_root="$(mktemp -d)"; then
+  if ! probe_root="$(mktemp -d "${${TMPDIR:-/tmp}%/}/lint-test.XXXXXX")"; then
     fail_check "the rule file check needs a folder" "mktemp failed"
     return 0
   fi

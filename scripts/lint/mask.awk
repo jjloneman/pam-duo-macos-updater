@@ -10,7 +10,8 @@
 # - Grep-style checks can't fully parse zsh, so this tracks quotes, heredocs,
 #   arithmetic, command substitutions and comments, and nothing else.
 #
-# - Awk has no local keyword, so extra parameters are a function's locals.
+# - Awk has no local keyword, so extra parameters are a function's locals. The
+#   extra spaces before them are awk's convention for showing where they start.
 
 # Returns spaces as wide as the text.
 function blank_text(text,    spaces, position) {

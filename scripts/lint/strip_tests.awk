@@ -8,7 +8,8 @@
 # - A command substitution inside a test stays visible, as its branches are
 #   real ones.
 #
-# - Awk has no local keyword, so extra parameters are a function's locals.
+# - Awk has no local keyword, so extra parameters are a function's locals. The
+#   extra spaces before them are awk's convention for showing where they start.
 
 # Reports whether a test can open at this position.
 #

@@ -24,7 +24,7 @@ typeset -gr LINT_DIR="${0:A:h}/lint"
 typeset -gr REPO_ROOT="${0:A:h:h}"
 typeset -g VIEW_DIR
 
-if ! VIEW_DIR="$(mktemp -d)"; then
+if ! VIEW_DIR="$(mktemp -d "${${TMPDIR:-/tmp}%/}/lint.XXXXXX")"; then
   print -r -- "could not make a temporary folder" >&2
   exit 2
 fi

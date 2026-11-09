@@ -23,7 +23,7 @@ run_test_file() {
   local warnings_file warnings_text
   local -i test_status
 
-  if ! warnings_file="$(mktemp)"; then
+  if ! warnings_file="$(mktemp "${${TMPDIR:-/tmp}%/}/warnings.XXXXXX")"; then
     print -r -- "could not make a temporary file" >&2
     return 1
   fi

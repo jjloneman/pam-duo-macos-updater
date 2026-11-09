@@ -1,7 +1,7 @@
 # Reads a file into the views the rules check, and reports what they find.
 
 # The lines of the file being checked, one array per view.
-typeset -ga CODE_LINES COMMENT_LINES SOURCE_LINES
+typeset -ga CODE_LINES COMMENT_LINES EXPAND_LINES SOURCE_LINES
 
 # The file's statements, with continued lines joined.
 typeset -ga STATEMENT_LINES STATEMENT_TEXTS
@@ -146,6 +146,8 @@ load_views() {
   typeset -ga SOURCE_LINES=("${(@f)view_text}")
   view_text="$(< "${VIEW_DIR}/code")"
   typeset -ga CODE_LINES=("${(@f)view_text}")
+  view_text="$(< "${VIEW_DIR}/expand")"
+  typeset -ga EXPAND_LINES=("${(@f)view_text}")
   view_text="$(< "${VIEW_DIR}/comment")"
   typeset -ga COMMENT_LINES=("${(@f)view_text}")
   collect_functions

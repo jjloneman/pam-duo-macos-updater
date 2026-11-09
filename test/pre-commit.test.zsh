@@ -224,7 +224,11 @@ main() {
   check_signal_cleanup
   check_symlink_skipped
   check_no_hook_warnings
-  cd -- "${REPO_ROOT}"
+
+  if ! cd -- "${REPO_ROOT}"; then
+    abort_setup "could not return to ${REPO_ROOT}"
+  fi
+
   finish_checks "pre-commit"
   return "$?"
 }
