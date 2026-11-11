@@ -5,7 +5,7 @@ description: Every code and lint rule this repo uses for zsh, each marked Tested
 tags: [linting, shell, zsh]
 status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
-verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 sources:
   - id: chazelas-arith
     resource: https://www.zsh.org/mla/workers/2021/msg01243.html
@@ -205,6 +205,7 @@ These are project choices, not consensus (Inference, 2026-11-06). Google's guide
 - **Comments:** one of three lines or more opens with a prose sentence, then `-` bullets. Bullets may sit together when each fits on one line; once any wraps, a blank `#` line separates every bullet. Every function has a doc comment.
 - **Tests:** `describe "<unit>"` and `test_case "<scenario>"`, with `# Given -`, `# When -` and `# Then -` phase comments, the shape of the owner's vitest tests.
 - **Limits:** 300 lines per file and 40 per function, as proposed in issue 1.
+  - The helper in `libexec/` may run to 450 lines, because it must stay one self-contained file and the spacing rules alone add about 100 blank lines. Converted, it was 436 lines on 2026-11-11 (Tested, with `wc -l`).
 - **No short forms, `function` or backticks:** Google says `$(command)` over backticks, and that `function` is extraneous with `()` [google-shell] (Source). `+o shortloops` rejected `for i in 1; print $i`, but accepted `if [[ a == a ]] { print x }` and `for i (1) { print $i }`, so lint must catch those (Tested).
 
 ## Lint rules

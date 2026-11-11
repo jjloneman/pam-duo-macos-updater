@@ -2,6 +2,8 @@
 
 typeset -gri FILE_LINE_LIMIT=300
 typeset -gri FUNCTION_LINE_LIMIT=40
+typeset -gr HELPER_FILE="libexec/pam-duo-macos-updater-root"
+typeset -gri HELPER_FILE_LINE_LIMIT=450
 typeset -gri LINE_WIDTH_LIMIT=80
 
 # Reports a comment that runs past 80 columns, for files exempt from
@@ -171,10 +173,19 @@ rule_doc_comment() {
   return 0
 }
 
-# Limits a file to 300 lines.
+# Limits a file to 300 lines, or the root-owned helper to 450.
+#
+# - The helper must stay one self-contained file, since it's the only code root
+#   runs and its install shows one diff, so it can't split to fit.
 rule_file_limit() {
-  if ((${#SOURCE_LINES} > FILE_LINE_LIMIT)); then
-    report 1 file_limit "${#SOURCE_LINES} lines, over ${FILE_LINE_LIMIT}"
+  local -i limit=FILE_LINE_LIMIT
+
+  if [[ "${CURRENT_FILE}" == "${HELPER_FILE}" ]]; then
+    limit=HELPER_FILE_LINE_LIMIT
+  fi
+
+  if ((${#SOURCE_LINES} > limit)); then
+    report 1 file_limit "${#SOURCE_LINES} lines, over ${limit}"
   fi
 
   return 0

@@ -3,8 +3,9 @@ type: Decision
 title: Why the helper is root-owned
 description: Root only runs one self-contained, root-owned helper that sources nothing, so editing the repo can't change what an approval runs.
 tags: [pam, root, security, sudo]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Why the helper is root-owned
@@ -34,6 +35,7 @@ This is the plan for the code arriving in issues 2 and 3.
 - **Otherwise an edit becomes root.** If root ran the repo's script, anything running as the user could edit it, and a routine-looking approval would run the new code. That includes coding agents, which run as the user.
 - **A shell script can be read.** The diff before `install-helper` is what protects root. A compiled helper would reduce that to comparing checksums of a file built as the user. See [Why zsh](why-zsh.md).
 - **Small enough to review:** the helper was 232 lines, 109 of them code, as of 2026-11-06.
+  - Converted to the code conventions in issue 17, it was 436 lines on 2026-11-11, most of the growth being comments and the blank lines the spacing rules need (Tested, with `wc -l`). It stays one file, so lint allows it 450 lines rather than the usual 300, since splitting it would mean several root-owned files and diffs to approve (Inference).
 - **It has passed a real test:** an approved install and a denied install that rolled back passed with real root and real Duo on 2026-11-06, using the earlier copy of the helper this project starts from.
 
 ## Consequences

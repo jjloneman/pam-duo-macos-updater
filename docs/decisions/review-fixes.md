@@ -5,7 +5,7 @@ description: What code reviews and the owner's review found wrong in this repo's
 tags: [linting, review, testing, zsh]
 status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-11T06:48:05Z }
-verified: { by: human:jjloneman, at: 2026-11-11T06:49:46Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Fixes found in review
@@ -97,6 +97,16 @@ A docs-only PR's CI run failed two harness checks, which passed on re-run.
 | The closing-terminal case waited only for the swapped marker to exist, but the helper writes it as `pending` before setting its trap and moving the module in, so CI compared too early and sent `HUP` that killed the helper with 129, not 4 | The case waits, for up to 30 seconds, until the marker holds this run's ID, and checks that it got there before signalling | Stalling the helper after `pending` failed the old wait every time and passes the new one, and 60 runs side by side under CPU load all passed (tested 2026-11-11) |
 
 - **An `AGENTS.md` trap line was added** rather than a lint rule, because whether a wait proves a trap is set needs reading the code it waits on.
+
+## Found in issue 17
+
+Converting the helper took it off the legacy list, and `pnpm coverage` then failed although `pnpm check` passed.
+
+| What failed                                                                                                                                                                                  | What prevents it now                                                                           | Verified by                                                                                              |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------- |
+| Lint's test of the repo linted the traced scratch copy, where coverage inserts a 267-column trap as line 2 of each file, so the first converted file failed `line_width` only under coverage | Coverage exports `COVERAGE_REPO_ROOT`, and that test lints the untraced original when it's set | `pnpm coverage` failed on the converted helper before the change and passed after it (tested 2026-11-11) |
+
+- **No lint rule added:** it was the test's choice of folder, not a pattern in the code.
 
 ## Why
 

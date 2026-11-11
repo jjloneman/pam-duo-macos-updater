@@ -31,6 +31,10 @@ typeset -gr COVERAGE_TARGETS_LIB="${0:A:h}/coverage/targets.zsh"
 typeset -gr LINT_DIR="${0:A:h}/lint"
 typeset -gr TEST_RUNNER="${0:A:h}/test.zsh"
 
+# Lets lint's test of the repo check this tree rather than the traced copy,
+# whose inserted trap lines run past 80 columns in every converted file.
+typeset -gx COVERAGE_REPO_ROOT="${0:A:h:h}"
+
 # The parts of the line inserted into each traced file, with @TRACE_FILE@
 # standing for the trace.
 #

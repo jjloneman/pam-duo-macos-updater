@@ -162,7 +162,7 @@ readonly STATE_DIR=$HOME/.local/state/pam-duo-macos-updater
 readonly MIN_FREE_GB=2
 
 # The installed module.
-readonly MODULE_PATH=/usr/local/lib/pam/pam_duo.so
+readonly PAM_MODULE_PATH=/usr/local/lib/pam/pam_duo.so
 
 # How long a release must have been public before it may be installed.
 readonly MORATORIUM_DAYS=7
@@ -260,7 +260,7 @@ alert() {
 # - Returns 1 on any failure, so `update` can say so while carrying on.
 auto() {
   # Nothing to keep patched without a module.
-  [[ -e $MODULE_PATH ]] || return 0
+  [[ -e $PAM_MODULE_PATH ]] || return 0
 
   # Set to 1 by a warning that shouldn't stop the rest of this.
   local failed=0
@@ -409,8 +409,8 @@ check() {
 # Compare the module with the latest releases, and alert about what's found.
 check_versions() {
   # A missing module means sudo isn't protected as expected, so don't skip it.
-  if [[ ! -e $MODULE_PATH ]]; then
-    fail "$MODULE_PATH is missing, so Duo can't be approving sudo"
+  if [[ ! -e $PAM_MODULE_PATH ]]; then
+    fail "$PAM_MODULE_PATH is missing, so Duo can't be approving sudo"
     return 1
   fi
 
@@ -777,9 +777,9 @@ install_module() {
 
   # Confirm the file in place really is the one that was verified.
   local installed_checksum
-  installed_checksum=$(sha256_of "$MODULE_PATH") || return 1
+  installed_checksum=$(sha256_of "$PAM_MODULE_PATH") || return 1
   if [[ $installed_checksum != "$checksum" ]]; then
-    fail "$MODULE_PATH isn't the module just verified: test sudo now"
+    fail "$PAM_MODULE_PATH isn't the module just verified: test sudo now"
     return 1
   fi
 }
@@ -790,7 +790,7 @@ load_release_state() {
   local cutoff=$1
 
   # What's in the module is what's actually running, whatever was last built.
-  read_module_versions "$MODULE_PATH" || return 1
+  read_module_versions "$PAM_MODULE_PATH" || return 1
   installed_openssl=$module_openssl
   installed_duo=$module_duo
 
@@ -1083,8 +1083,8 @@ sha256_of() {
 # Print the versions, the daily job, and anything needing attention.
 status() {
   # A Mac with no module has nothing else to report.
-  if [[ ! -e $MODULE_PATH ]]; then
-    print -r -- "$MODULE_PATH is not installed"
+  if [[ ! -e $PAM_MODULE_PATH ]]; then
+    print -r -- "$PAM_MODULE_PATH is not installed"
     return 0
   fi
 
@@ -1092,7 +1092,7 @@ status() {
   local failed=0
 
   # Report the module, which works with no network.
-  if read_module_versions "$MODULE_PATH"; then
+  if read_module_versions "$PAM_MODULE_PATH"; then
     print -r -- "installed: OpenSSL $module_openssl, duo_unix $module_duo"
   else
     failed=1
@@ -1416,8 +1416,8 @@ case $command in
   status) status ;;
   build | rebuild)
     # Reading the current state needs the module, which must already exist.
-    if [[ ! -e $MODULE_PATH ]]; then
-      fail "$MODULE_PATH isn't installed yet; follow the playbook first"
+    if [[ ! -e $PAM_MODULE_PATH ]]; then
+      fail "$PAM_MODULE_PATH isn't installed yet; follow the playbook first"
       exit 1
     fi
 
