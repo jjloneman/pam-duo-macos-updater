@@ -5,7 +5,7 @@ description: Every code and lint rule this repo uses for zsh, each marked Tested
 tags: [linting, shell, zsh]
 status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
-verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 sources:
   - id: chazelas-arith
     resource: https://www.zsh.org/mla/workers/2021/msg01243.html

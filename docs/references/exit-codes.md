@@ -5,7 +5,7 @@ description: What each exit status of the script and the root-owned helper means
 tags: [exit-codes, pam, root]
 status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-10T01:37:16Z }
-verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Exit codes

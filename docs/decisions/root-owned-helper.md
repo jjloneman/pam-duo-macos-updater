@@ -3,8 +3,9 @@ type: Decision
 title: Why the helper is root-owned
 description: Root only runs one self-contained, root-owned helper that sources nothing, so editing the repo can't change what an approval runs.
 tags: [pam, root, security, sudo]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Why the helper is root-owned

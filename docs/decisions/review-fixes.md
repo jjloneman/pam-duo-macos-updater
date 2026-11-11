@@ -5,7 +5,7 @@ description: What code reviews and the owner's review found wrong in this repo's
 tags: [linting, review, testing, zsh]
 status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-11T06:48:05Z }
-verified: { by: human:jjloneman, at: 2026-11-11T06:49:46Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Fixes found in review

@@ -3,8 +3,9 @@ type: Reference
 title: Failure modes
 description: What each module does when a command, file operation or signal fails, and what that leaves in place, one table per module.
 tags: [failure-modes, pam, root]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-11T18:50:19Z }
+verified: { by: human:jjloneman, at: 2026-11-11T22:29:32Z }
 ---
 
 # Failure modes
