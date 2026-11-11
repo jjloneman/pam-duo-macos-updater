@@ -1,0 +1,33 @@
+#!/bin/zsh -f
+emulate -R zsh
+
+source "${0:A:h:h}/lib/greet.zsh"
+
+# Says hi, or counts a bad name.
+check() {
+  local name="${1}"
+  local -i bad_count=0
+
+  if [[ ${name} == bad ||
+    ${name} == worse ]]; then
+    ((bad_count += 1))
+    print -r -- "bad ${bad_count}"
+    return 1
+  fi
+
+  (true)
+  greet "${name}"
+  return 0
+}
+
+case "${1:-}" in
+  real)
+    print -r -- real
+    ;;
+  quiet) ;;
+  (silent) ;;
+  (loud);;
+  *)
+    check "${1:-x}"
+    ;;
+esac

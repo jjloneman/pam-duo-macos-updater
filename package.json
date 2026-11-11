@@ -20,6 +20,7 @@
   "scripts": {
     "changeset": "changeset",
     "check": "pnpm format && pnpm lint && pnpm test",
+    "coverage": "/bin/zsh -f scripts/coverage.zsh",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "/bin/zsh -f scripts/lint.zsh",

@@ -55,6 +55,9 @@ collect_functions() {
 # - A multi-line array can hold a command, so it has to read as one statement.
 #
 # - A case branch's `)` has no opener, so the count never goes below zero.
+#
+# - Coverage reads the same statements, and joins lines ending in an operator
+#   itself, so lint's findings stay on the line they're about.
 collect_statements() {
   local closers code_line openers statement=""
   local -i index=0 open_count=0 start=0
@@ -88,6 +91,7 @@ collect_statements() {
 
   # One statement per line, which report_pattern maps back to its source line.
   print -rl -- "${STATEMENT_TEXTS[@]}" > "${VIEW_DIR:?}/statement"
+
   return 0
 }
 
@@ -101,10 +105,12 @@ discover_targets() {
     lib/*.zsh(N.)
     libexec/*(N.)
     scripts/*.zsh(N.)
+    scripts/coverage/*.zsh(N.)
     scripts/lint/*.zsh(N.)
     test/*.zsh(N.)
   )
   print -rl -- "${targets[@]}"
+
   return 0
 }
 
@@ -112,10 +118,15 @@ discover_targets() {
 is_sourced_file() {
   if ((${#} != 1)); then
     print -r -- "is_sourced_file needs a path" >&2
+
     return 2
   fi
 
-  if [[ ${1} == (lib/*|scripts/lint/*|test/*helpers.zsh) ]]; then
+  if [[ ${1} == (lib|scripts/coverage|scripts/lint)/* ]]; then
+    return 0
+  fi
+
+  if [[ ${1} == test/*helpers.zsh ]]; then
     return 0
   fi
 
@@ -126,6 +137,7 @@ is_sourced_file() {
 load_views() {
   if ((${#} != 1)); then
     print -r -- "load_views needs a path" >&2
+
     return 2
   fi
 
@@ -137,6 +149,7 @@ load_views() {
     if ! LC_ALL=C /usr/bin/awk -v view="${view_name}" \
       -f "${LINT_DIR}/mask.awk" "${1}" > "${VIEW_DIR:?}/${view_name}"; then
       tool_error "could not read ${1}"
+
       return 2
     fi
   done
@@ -152,6 +165,7 @@ load_views() {
   typeset -ga COMMENT_LINES=("${(@f)view_text}")
   collect_functions
   collect_statements
+
   return 0
 }
 
@@ -178,11 +192,13 @@ read_legacy_list() {
 report() {
   if ((${#} != 3)); then
     print -r -- "report needs a line, a rule and a message" >&2
+
     return 2
   fi
 
   print -r -- "${CURRENT_FILE}:${1}: ${2}: ${3}"
   typeset -gi FINDING_COUNT=$((FINDING_COUNT + 1))
+
   return 0
 }
 
@@ -190,6 +206,7 @@ report() {
 report_matches() {
   if ((${#} != 4)); then
     print -r -- "report_matches needs a rule, view, message and matches" >&2
+
     return 2
   fi
 
@@ -218,6 +235,7 @@ report_matches() {
 report_pattern() {
   if ((${#} < 4 || ${#} > 5)); then
     print -r -- "report_pattern needs a rule, view, regex and message" >&2
+
     return 2
   fi
 
@@ -231,6 +249,7 @@ report_pattern() {
 
   if ((search_status > 1)); then
     tool_error "grep failed for ${rule_name}"
+
     return 2
   fi
 
@@ -243,10 +262,12 @@ report_pattern() {
 
   if ((search_status > 1)); then
     tool_error "the exclude grep failed for ${rule_name}"
+
     return 2
   fi
 
   report_matches "${rule_name}" "${view_name}" "${message}" "${matches}"
+
   return 0
 }
 
@@ -254,6 +275,7 @@ report_pattern() {
 tool_error() {
   print -r -- "lint error: ${1:-unknown}" >&2
   typeset -gi TOOL_ERROR_COUNT=$((TOOL_ERROR_COUNT + 1))
+
   return 0
 }
 
@@ -264,6 +286,7 @@ tool_error() {
 trim_line() {
   if ((${#} != 1)); then
     print -r -- "trim_line needs a line" >&2
+
     return 2
   fi
 
@@ -272,5 +295,6 @@ trim_line() {
   trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
   trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
   typeset -g TRIMMED_LINE="${trimmed}"
+
   return 0
 }
