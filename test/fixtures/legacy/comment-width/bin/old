@@ -1,0 +1,5 @@
+#!/bin/bash
+# This comment runs well past eighty columns, which lint must catch in legacy code too.
+echo "$name"
+echo "$name"  # This trailing comment runs well past eighty columns, so lint must catch it.
+echo "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # ok

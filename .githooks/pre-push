@@ -26,6 +26,26 @@ hash -r
 typeset -gr ZERO_SHA=0000000000000000000000000000000000000000
 typeset -g EXPORT_ROOT
 
+# Writes a commit's files to a folder, through an index of its own.
+export_commit() {
+  if ((${#} != 2)); then
+    print -r -- "export_commit needs a commit and a folder" >&2
+
+    return 2
+  fi
+
+  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git read-tree "${1}"; then
+    return 1
+  fi
+
+  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git checkout-index --all \
+    --prefix="${2}/"; then
+    return 1
+  fi
+
+  return 0
+}
+
 # Exports one commit through a scratch index, lints it, then removes it.
 #
 # - Only a commit with no history of scripts/lint.zsh may skip lint. Checking
@@ -43,6 +63,7 @@ typeset -g EXPORT_ROOT
 lint_commit() {
   if ((${#} != 1)); then
     print -r -- "lint_commit needs a commit" >&2
+
     return 2
   fi
 
@@ -51,32 +72,31 @@ lint_commit() {
 
   if ! lint_history="$(git log -1 --format=%H "${1}" -- scripts/lint.zsh)"; then
     print -r -- "could not read the history of ${1}" >&2
+
     return 1
   fi
 
   if [[ -z ${lint_history} ]]; then
     print -r -- "skipping ${1}, which predates scripts/lint.zsh" >&2
+
     return 0
   fi
 
-  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git read-tree "${1}"; then
-    return 1
-  fi
-
-  if ! GIT_INDEX_FILE="${EXPORT_ROOT}/index" git checkout-index --all \
-    --prefix="${commit_copy}/"; then
+  if ! export_commit "${1}" "${commit_copy}"; then
     return 1
   fi
 
   if [[ ! -f ${commit_copy}/scripts/lint.zsh ]]; then
     print -r -- "${1} removes scripts/lint.zsh" >&2
     rm -rf -- "${commit_copy:?}"
+
     return 1
   fi
 
   /bin/zsh -f "${commit_copy}/scripts/lint.zsh"
   lint_status="$?"
   rm -rf -- "${commit_copy:?}"
+
   return "${lint_status}"
 }
 
@@ -126,17 +146,20 @@ list_destination_tips() {
 list_new_commits() {
   if ((${#} != 2)); then
     print -r -- "list_new_commits needs a local and a remote commit" >&2
+
     return 2
   fi
 
   if [[ ${2} != "${ZERO_SHA}" ]]; then
     if git cat-file -e "${2}^{commit}" 2> /dev/null; then
       git rev-list "${1}" "^${2}"
+
       return "$?"
     fi
   fi
 
   git rev-list "${1}" --not "${DESTINATION_TIPS[@]}"
+
   return "$?"
 }
 
@@ -164,6 +187,7 @@ read_new_commits() {
 # Removes the exported commits.
 remove_exports() {
   rm -rf -- "${EXPORT_ROOT:?}"
+
   return 0
 }
 

@@ -48,6 +48,7 @@ are_fully_staged() {
   fi
 
   print -r -- "stage all of each file, or stash the rest, then retry" >&2
+
   return 1
 }
 
@@ -114,8 +115,7 @@ is_partial_commit() {
 # Lints an export of the index, which is exactly what will be committed.
 #
 # - Linting the working tree let an unstaged edit elsewhere block an unrelated
-#   commit, and let an unstaged fix hide a problem in the staged content.
-#   Tested.
+#   commit, and an unstaged fix hide a problem in the staged content. Tested.
 #
 # - It refuses with a clear message when lint itself isn't staged, rather than
 #   failing with zsh's bare "can't open input file". Tested.
@@ -135,10 +135,12 @@ lint_index() {
 
   if [[ ! -f ${index_copy}/scripts/lint.zsh ]]; then
     print -r -- "the index has no scripts/lint.zsh, so stage it too" >&2
+
     return 1
   fi
 
   /bin/zsh -f "${index_copy}/scripts/lint.zsh"
+
   return "$?"
 }
 
@@ -174,6 +176,7 @@ prepare_staged_files() {
   fi
 
   format_and_restage
+
   return "$?"
 }
 
@@ -218,6 +221,7 @@ read_staged_regular_files() {
 # Removes the exported index.
 remove_exports() {
   rm -rf -- "${EXPORT_ROOT:?}"
+
   return 0
 }
 
@@ -232,16 +236,19 @@ remove_exports() {
 restage_file() {
   if ((${#} != 1)); then
     print -r -- "restage_file needs a path" >&2
+
     return 2
   fi
 
   if is_partial_commit; then
     print -r -- "${1} was reformatted, so commit it again" >&2
+
     return 1
   fi
 
   if ! git add -- "${1}"; then
     print -r -- "could not re-stage ${1}" >&2
+
     return 1
   fi
 
@@ -272,6 +279,7 @@ main() {
   fi
 
   lint_index
+
   return "$?"
 }
 

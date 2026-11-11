@@ -7,6 +7,7 @@
 check_branch_order() {
   if ((${#} != 3)); then
     print -r -- "check_branch_order needs a line and two patterns" >&2
+
     return 2
   fi
 
@@ -15,6 +16,7 @@ check_branch_order() {
 
   if [[ ${previous} == "*" ]]; then
     report "${index}" sorted_case_branches "the catch-all must be last"
+
     return 0
   fi
 
@@ -34,6 +36,7 @@ check_branch_order() {
 has_order_comment() {
   if ((${#} != 1)); then
     print -r -- "has_order_comment needs a line number" >&2
+
     return 2
   fi
 
@@ -141,6 +144,43 @@ rule_sorted_functions() {
     fi
 
     previous_name="${function_name}"
+  done
+
+  return 0
+}
+
+# Checks that a run of consecutive `source` lines is sorted by path.
+#
+# - The same order perfectionist gives imports in the TypeScript repos. Where
+#   one file needs another loaded first, an `# Order:` comment says so.
+rule_sorted_source_lines() {
+  local comment_text previous_path="" source_path
+  local -i index
+
+  for ((index = 1; index <= ${#CODE_LINES}; index++)); do
+    trim_line "${CODE_LINES[index]}"
+
+    comment_text="${COMMENT_LINES[index]:-}"
+
+    # A comment between two source lines keeps the run going.
+    if [[ -z ${TRIMMED_LINE} && -n ${comment_text// /} ]]; then
+      continue
+    fi
+
+    if [[ ${TRIMMED_LINE} != "source "* ]]; then
+      previous_path=""
+      continue
+    fi
+
+    source_path="${(L)${SOURCE_LINES[index]#*source }}"
+
+    if [[ -n ${previous_path} && ${source_path} < ${previous_path} ]]; then
+      if ! has_order_comment "${index}"; then
+        report "${index}" sorted_source_lines "sort this source above the last"
+      fi
+    fi
+
+    previous_path="${source_path}"
   done
 
   return 0
