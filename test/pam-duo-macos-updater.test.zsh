@@ -118,13 +118,13 @@ setup() {
     -e 's#\[\[ ! -t 0 \]\]#[[ -n ${FORCE_NO_TTY:-} ]]#' \
     "$SOURCE" > "$SANDBOX/pam-duo-macos-updater"
   sed -E \
-    -e "s#^readonly PAM_MODULE_PATH=.*#readonly PAM_MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
-    -e "s#^readonly CONFIRMED_FLAG=.*#readonly CONFIRMED_FLAG=$SANDBOX/fake/run/confirmed#" \
-    -e "s#^readonly SWAPPED_FLAG=.*#readonly SWAPPED_FLAG=$SANDBOX/fake/run/swapped#" \
-    -e "s#^readonly DUO_CONFIG=.*#readonly DUO_CONFIG=$SANDBOX/fake/etc/pam_duo.conf#" \
-    -e "s#^readonly PAM_CONFIG=.*#readonly PAM_CONFIG=$SANDBOX/fake/etc/sudo_local#" \
-    -e "s#^readonly LOCK_FILE=.*#readonly LOCK_FILE=$SANDBOX/fake/run/lock#" \
-    -e "s#^readonly CONFIRM_TIMEOUT_SECONDS=.*#readonly CONFIRM_TIMEOUT_SECONDS=3#" \
+    -e "s#^typeset -gr PAM_MODULE_PATH=.*#typeset -gr PAM_MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
+    -e "s#^typeset -gr CONFIRMED_FLAG=.*#typeset -gr CONFIRMED_FLAG=$SANDBOX/fake/run/confirmed#" \
+    -e "s#^typeset -gr SWAPPED_FLAG=.*#typeset -gr SWAPPED_FLAG=$SANDBOX/fake/run/swapped#" \
+    -e "s#^typeset -gr DUO_CONFIG=.*#typeset -gr DUO_CONFIG=$SANDBOX/fake/etc/pam_duo.conf#" \
+    -e "s#^typeset -gr PAM_CONFIG=.*#typeset -gr PAM_CONFIG=$SANDBOX/fake/etc/sudo_local#" \
+    -e "s#^typeset -gr LOCK_FILE=.*#typeset -gr LOCK_FILE=$SANDBOX/fake/run/lock#" \
+    -e "s#^typeset -gri CONFIRM_TIMEOUT_SECONDS=.*#typeset -gri CONFIRM_TIMEOUT_SECONDS=3#" \
     -e 's#\(\(EUID != 0\)\)#false#' \
     -e "s#!= root:wheel:600#!= \$(id -un):\$(id -gn):600#" \
     -e 's#install -o root -g wheel -m 755#install -m 755#' \
@@ -670,6 +670,10 @@ expect 'helper bad arguments: status 2' status_is 2
 output=$("$SANDBOX/libexec/pam-duo-macos-updater-root" /x nothex run.1 2>&1)
 code=$?
 expect 'helper bad checksum format: status 2' status_is 2
+output=$("$SANDBOX/libexec/pam-duo-macos-updater-root" /x "${(l:64::0:)}" 'run 1' 2>&1)
+code=$?
+expect 'helper bad run ID: status 2' status_is 2
+expect 'helper bad run ID: says the usage' has 'Usage:'
 
 # Config safety that the first version missed.
 reset

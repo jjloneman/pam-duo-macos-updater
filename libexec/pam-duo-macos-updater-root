@@ -1,6 +1,14 @@
 #!/bin/zsh -f
+emulate -R zsh
+setopt no_short_loops no_unset pipe_fail typeset_silent \
+  warn_create_global warn_nested_var
+unset CDPATH
 
-# Swap in a verified Duo PAM module as root, and restore the old one unless a
+# Use only the system's commands, as this is running as root.
+path=(/usr/bin /bin /usr/sbin /sbin)
+hash -r
+
+# Swaps in a verified Duo PAM module as root, and restores the old one unless a
 # real Duo approval proves that sudo still works with the new one.
 #
 # - pam-duo-macos-updater runs this with sudo, from a root-owned copy at
@@ -16,23 +24,12 @@
 #
 # - Closing the terminal counts as failing to prove it.
 #
-# Usage: pam-duo-macos-updater-root <module> <checksum> <run-id>
+# - Usage: pam-duo-macos-updater-root <module> <checksum> <run-id>
 #
-# Exit status:
+# - Its exit status is one of the EXIT_* constants below, which keep the
+#   numbers in docs/references/exit-codes.md.
 #
-# - 0: proven, and the new module is in place.
-# - 2: refused, and nothing changed.
-# - 3: no approval arrived, and the old module was restored.
-# - 4: interrupted by a signal, and the old module was restored.
-# - 5: the restore failed, so an unproven module may be live.
-#
-# See https://github.com/jjloneman/pam-duo-macos-updater for how it works.
-
-# Stop a pipeline on any failure, and treat an unset variable as an error.
-setopt pipe_fail no_unset
-
-# Use only the system's commands, as this is running as root.
-path=(/usr/bin /bin /usr/sbin /sbin)
+# - See https://github.com/jjloneman/pam-duo-macos-updater for how it works.
 
 # Keep the markers readable, so pam-duo-macos-updater can follow along without
 # root.
@@ -42,190 +39,398 @@ umask 022
 zmodload zsh/system
 
 # How long to wait for a Duo approval before restoring.
-readonly CONFIRM_TIMEOUT_SECONDS=180
+typeset -gri CONFIRM_TIMEOUT_SECONDS=180
 
-# Root-only markers for the two stages of an install; anyone can read them.
-readonly CONFIRMED_FLAG=/var/run/pam-duo-macos-updater-confirmed
-readonly SWAPPED_FLAG=/var/run/pam-duo-macos-updater-swapped
+# Root-only marker that the new module has been proven; anyone can read it.
+typeset -gr CONFIRMED_FLAG="/var/run/pam-duo-macos-updater-confirmed"
 
 # Duo's config, which holds the secret key.
-readonly DUO_CONFIG=/etc/duo/pam_duo.conf
+typeset -gr DUO_CONFIG="/etc/duo/pam_duo.conf"
+
+# Proven, and the new module is in place.
+typeset -gri EXIT_PROVEN=0
+
+# Refused, and nothing changed.
+typeset -gri EXIT_REFUSED=2
+
+# The restore failed, so an unproven module may be live.
+typeset -gri EXIT_RESTORE_FAILED=5
+
+# No approval arrived, and the old module was restored.
+typeset -gri EXIT_RESTORED=3
+
+# Interrupted by a signal, and the old module was restored.
+typeset -gri EXIT_RESTORED_AFTER_SIGNAL=4
 
 # Stops a second install starting while an earlier one is still waiting.
-readonly LOCK_FILE=/var/run/pam-duo-macos-updater.lock
-
-# The installed module, and the last one proven to work.
-readonly PAM_MODULE_PATH=/usr/local/lib/pam/pam_duo.so
-readonly PREVIOUS_PAM_MODULE_PATH=$PAM_MODULE_PATH.previous
+typeset -gr LOCK_FILE="/var/run/pam-duo-macos-updater.lock"
 
 # OpenSSL's config directory, built into the module.
-readonly OPENSSL_DIRECTORY=/etc/duo/ssl
+typeset -gr OPENSSL_DIRECTORY="/etc/duo/ssl"
 
 # The file whose Duo line turns the module on for sudo.
-readonly PAM_CONFIG=/etc/pam.d/sudo_local
+typeset -gr PAM_CONFIG="/etc/pam.d/sudo_local"
 
-# Succeed only if the Duo config can't fail open, printing why otherwise.
-config_is_safe() {
+# The installed module.
+typeset -gr PAM_MODULE_PATH="/usr/local/lib/pam/pam_duo.so"
+
+# The last module proven to work.
+typeset -gr PREVIOUS_PAM_MODULE_PATH="${PAM_MODULE_PATH}.previous"
+
+# Root-only marker that a swap is under way; anyone can read it.
+typeset -gr SWAPPED_FLAG="/var/run/pam-duo-macos-updater-swapped"
+
+# Printed when the arguments aren't what pam-duo-macos-updater passes.
+typeset -gr USAGE="Usage: ${0:t} <module> <checksum> <run-id>"
+
+# Succeeds only if the checksum and run ID are exactly what
+# pam-duo-macos-updater passes.
+#
+# - Removing every allowed character must leave nothing behind.
+# - This avoids `=~`, which adds a module load at run time.
+are_arguments_valid() {
+  if ((${#} != 2)); then
+    print -r -u2 -- "are_arguments_valid needs a checksum and a run ID"
+
+    return 1
+  fi
+
+  local checksum="${1}" run_id="${2}"
+
+  if [[ "${#checksum}" != 64 || -n "${checksum//[0-9a-f]/}" ]]; then
+    return 1
+  fi
+
+  if [[ -z "${run_id}" || -n "${run_id//[0-9a-zA-Z.-]/}" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Restores the last proven module if an earlier install never finished.
+#
+# - The live module was never proven, so it mustn't become the copy that gets
+#   restored later.
+finish_earlier_install() {
+  if [[ ! -e "${SWAPPED_FLAG}" ]]; then
+    return 0
+  fi
+
+  print -r -- "an earlier install didn't finish; restoring first"
+
+  if ! restore_previous; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Succeeds only if the Duo config can't fail open, printing why otherwise.
+is_config_safe() {
   # stat prints the owner, group, and mode; anything else exposes the secret.
-  if [[ $(stat -f '%Su:%Sg:%Lp' "$DUO_CONFIG") != root:wheel:600 ]]; then
-    print -r -u2 -- "$DUO_CONFIG must be root:wheel mode 600"
+  if [[ "$(stat -f '%Su:%Sg:%Lp' "${DUO_CONFIG}")" != root:wheel:600 ]]; then
+    print -r -u2 -- "${DUO_CONFIG} must be root:wheel mode 600"
+
     return 1
   fi
 
-  # Duo's default grants root when it can't be reached.
-  if ! grep -qE '^failmode[[:space:]]*=[[:space:]]*secure[[:space:]]*$' \
-    "$DUO_CONFIG"; then
-    print -r -u2 -- "$DUO_CONFIG must set failmode = secure"
-    return 1
-  fi
-
-  # A later line would override the one above, so it must be the only one.
-  if (($(grep -cE '^failmode[[:space:]]*=' "$DUO_CONFIG") != 1)); then
-    print -r -u2 -- "$DUO_CONFIG must set failmode exactly once"
+  if ! is_failmode_secure; then
     return 1
   fi
 
   # OpenSSL's config would come from here, so only root may write there.
-  if [[ -e $OPENSSL_DIRECTORY &&
-    $(stat -f '%Su:%Lp' "$OPENSSL_DIRECTORY") != root:755 ]]; then
-    print -r -u2 -- "$OPENSSL_DIRECTORY must be owned by root, mode 755"
+  if [[ -e "${OPENSSL_DIRECTORY}" &&
+    "$(stat -f '%Su:%Lp' "${OPENSSL_DIRECTORY}")" != root:755 ]]; then
+    print -r -u2 -- "${OPENSSL_DIRECTORY} must be owned by root, mode 755"
+
     return 1
   fi
 
   # A module that isn't turned on couldn't be proven by sudo; a commented-out
   # line doesn't count, and -F treats the path as plain text.
-  if ! grep -v '^[[:space:]]*#' "$PAM_CONFIG" \
-    | grep -F "$PAM_MODULE_PATH" > /dev/null; then
-    print -r -u2 -- "Duo isn't turned on in $PAM_CONFIG"
-    return 1
-  fi
-}
+  if ! grep -v '^[[:space:]]*#' "${PAM_CONFIG}" \
+    | grep -F "${PAM_MODULE_PATH}" > /dev/null; then
+    print -r -u2 -- "Duo isn't turned on in ${PAM_CONFIG}"
 
-# Put back the last proven module, and clear the markers.
-restore_previous() {
-  # Copy then rename, so sudo never sees a half-written file.
-  if ! cp -p "$PREVIOUS_PAM_MODULE_PATH" "$PAM_MODULE_PATH.new" \
-    || ! mv -f "$PAM_MODULE_PATH.new" "$PAM_MODULE_PATH"; then
-    # Leave the swapped marker, so the daily check alerts and the next run
-    # tries again.
-    print -r -u2 -- "RESTORE FAILED: test sudo, and see the playbook's undo"
     return 1
   fi
 
-  # The install is over, so neither marker applies now.
-  rm -f "$CONFIRMED_FLAG" "$SWAPPED_FLAG"
-
-  # Say what happened, for the build log.
-  print -r -- "restored the previous module"
+  return 0
 }
 
-# Swap in the module, wait for proof, and restore if it doesn't arrive.
-swap_and_prove() {
-  # Name the arguments: the verified module, its checksum, and this run's ID.
-  local source_module=$1 expected_checksum=$2 run_id=$3
+# Succeeds only if the Duo config sets `failmode = secure` exactly once,
+# printing why otherwise.
+is_failmode_secure() {
+  local failmode_count
+
+  # Duo's default grants root when it can't be reached.
+  if ! grep -qE '^failmode[[:space:]]*=[[:space:]]*secure[[:space:]]*$' \
+    "${DUO_CONFIG}"; then
+    print -r -u2 -- "${DUO_CONFIG} must set failmode = secure"
+
+    return 1
+  fi
+
+  # A later line would override the one above, so it must be the only one.
+  failmode_count="$(grep -cE '^failmode[[:space:]]*=' "${DUO_CONFIG}")"
+
+  if [[ "${failmode_count}" != 1 ]]; then
+    print -r -u2 -- "${DUO_CONFIG} must set failmode exactly once"
+
+    return 1
+  fi
+
+  return 0
+}
+
+# Takes the lock and refuses anything unsafe, printing why.
+prepare_to_swap() {
+  # The lock stays held until this process exits, though the name is local.
+  local lock_descriptor
 
   # Only root can do any of this.
   if ((EUID != 0)); then
     print -r -u2 -- "not running as root"
-    return 2
+
+    return 1
   fi
 
   # zsystem only opens an existing file, so make sure there is one.
-  touch "$LOCK_FILE" || return 2
+  if ! touch "${LOCK_FILE}"; then
+    return 1
+  fi
 
   # An earlier install may still be waiting, and two would undo each other.
-  local lock_descriptor
-  if ! zsystem flock -t 0 -f lock_descriptor "$LOCK_FILE" 2> /dev/null; then
+  if ! zsystem flock -t 0 -f lock_descriptor "${LOCK_FILE}" 2> /dev/null; then
     print -r -u2 -- "another install is still waiting; try again in 3 minutes"
-    return 2
+
+    return 1
   fi
 
   # Refuse to swap anything under a config that would fail open.
-  config_is_safe || return 2
+  if ! is_config_safe; then
+    return 1
+  fi
 
   # This is only for updating a module, so there must be one to restore.
-  if [[ ! -e $PAM_MODULE_PATH ]]; then
-    print -r -u2 -- "$PAM_MODULE_PATH is missing; see the playbook"
-    return 2
+  if [[ ! -e "${PAM_MODULE_PATH}" ]]; then
+    print -r -u2 -- "${PAM_MODULE_PATH} is missing; see the playbook"
+
+    return 1
   fi
 
-  # A leftover marker means the live module was never proven, so it mustn't
-  # become the copy that gets restored later.
-  if [[ -e $SWAPPED_FLAG ]]; then
-    print -r -- "an earlier install didn't finish; restoring first"
-    restore_previous || return 5
+  return 0
+}
+
+# Says that putting back the last proven module failed, and what to do.
+report_restore_failed() {
+  print -r -u2 -- "RESTORE FAILED: test sudo, and see the playbook's undo"
+
+  return 0
+}
+
+# Restores the last proven module and exits, with the given status if that
+# worked.
+#
+# - With no status it still restores, then uses EXIT_RESTORED, since leaving an
+#   unproven module live is worse than a wrong status.
+restore_and_exit() {
+  local restored_status="${1:-${EXIT_RESTORED}}"
+
+  if restore_previous; then
+    exit "${restored_status}"
   fi
 
-  # Clear any proof left by an approval that came after a timeout.
-  rm -f "$CONFIRMED_FLAG"
+  exit "${EXIT_RESTORE_FAILED}"
+}
 
-  # Copy it somewhere only root can write, then check that copy, so it can't
-  # change between the check and the swap.
-  install -o root -g wheel -m 755 "$source_module" "$PAM_MODULE_PATH.new" \
-    || return 2
-  local actual_checksum
-  actual_checksum=$(shasum -a 256 "$PAM_MODULE_PATH.new" | cut -d ' ' -f 1)
-  if [[ $actual_checksum != "$expected_checksum" ]]; then
-    rm -f "$PAM_MODULE_PATH.new"
-    print -r -u2 -- "$source_module changed since it was verified"
-    return 2
+# Puts back the last proven module, and clears the markers.
+restore_previous() {
+  # Copy then rename, so sudo never sees a half-written file.
+  if ! cp -p "${PREVIOUS_PAM_MODULE_PATH}" "${PAM_MODULE_PATH}.new"; then
+    # Leave the swapped marker, so the daily check alerts and the next run
+    # tries again.
+    report_restore_failed
+
+    return 1
+  fi
+
+  if ! mv -f "${PAM_MODULE_PATH}.new" "${PAM_MODULE_PATH}"; then
+    report_restore_failed
+
+    return 1
+  fi
+
+  # The install is over, so neither marker applies now.
+  rm -f "${CONFIRMED_FLAG}" "${SWAPPED_FLAG}"
+
+  # Say what happened, for the build log.
+  print -r -- "restored the previous module"
+
+  return 0
+}
+
+# Copies the module where only root can write, checks that copy, keeps the
+# working module, and marks the swap as pending.
+stage_module() {
+  if ((${#} != 2)); then
+    print -r -u2 -- "stage_module needs a module and a checksum"
+
+    return 1
+  fi
+
+  local source_module="${1}" expected_checksum="${2}" actual_checksum
+
+  # Checking the copy means it can't change between the check and the swap.
+  if ! install -o root -g wheel -m 755 "${source_module}" \
+    "${PAM_MODULE_PATH}.new"; then
+    return 1
+  fi
+
+  actual_checksum="$(shasum -a 256 "${PAM_MODULE_PATH}.new" | cut -d ' ' -f 1)"
+
+  if [[ "${actual_checksum}" != "${expected_checksum}" ]]; then
+    rm -f "${PAM_MODULE_PATH}.new"
+    print -r -u2 -- "${source_module} changed since it was verified"
+
+    return 1
   fi
 
   # Keep the working module; -p preserves its owner and mode.
-  cp -p "$PAM_MODULE_PATH" "$PREVIOUS_PAM_MODULE_PATH" || return 2
+  if ! cp -p "${PAM_MODULE_PATH}" "${PREVIOUS_PAM_MODULE_PATH}"; then
+    return 1
+  fi
 
   # Mark the swap first, so no moment exists where an unproven module is live
   # with no marker.
-  print -r -- pending > "$SWAPPED_FLAG" || return 2
-
-  # From here on, any signal restores the old module.
-  trap 'restore_previous && exit 4; exit 5' HUP INT TERM
-
-  # Swap it in; rename is atomic, so sudo sees one module or the other.
-  if ! mv -f "$PAM_MODULE_PATH.new" "$PAM_MODULE_PATH"; then
-    trap - HUP INT TERM
-    rm -f "$SWAPPED_FLAG"
-    print -r -u2 -- "couldn't move the new module into place"
-    return 2
+  if ! print -r -- pending > "${SWAPPED_FLAG}"; then
+    return 1
   fi
 
-  # Only now tell pam-duo-macos-updater to start its proof, using its own run
-  # ID, so the proof can't run against the old module.
-  print -r -- "$run_id" > "$SWAPPED_FLAG"
+  return 0
+}
 
-  # Wait for the proof, up to the limit.
-  local waited=0
-  while [[ ! -e $CONFIRMED_FLAG ]] && ((waited < CONFIRM_TIMEOUT_SECONDS)); do
+# Swaps in the module, waits for proof, and restores it if none arrives.
+swap_and_prove() {
+  if ((${#} != 3)); then
+    print -r -u2 -- "swap_and_prove needs a module, a checksum and a run ID"
+
+    return "${EXIT_REFUSED}"
+  fi
+
+  local source_module="${1}" expected_checksum="${2}" run_id="${3}"
+
+  if ! prepare_to_swap; then
+    return "${EXIT_REFUSED}"
+  fi
+
+  if ! finish_earlier_install; then
+    return "${EXIT_RESTORE_FAILED}"
+  fi
+
+  # Clear any proof left by an approval that came after a timeout.
+  rm -f "${CONFIRMED_FLAG}"
+
+  if ! stage_module "${source_module}" "${expected_checksum}"; then
+    return "${EXIT_REFUSED}"
+  fi
+
+  if ! swap_in "${run_id}"; then
+    return "${EXIT_REFUSED}"
+  fi
+
+  if wait_for_proof; then
+    return "${EXIT_PROVEN}"
+  fi
+
+  # No proof came, so put back the module that was working.
+  if ! restore_previous; then
+    return "${EXIT_RESTORE_FAILED}"
+  fi
+
+  return "${EXIT_RESTORED}"
+}
+
+# Moves the staged module into place, with any signal from then on restoring
+# the old one, and tells pam-duo-macos-updater to start its proof.
+swap_in() {
+  if ((${#} != 1)); then
+    print -r -u2 -- "swap_in needs a run ID"
+
+    return 1
+  fi
+
+  local run_id="${1}"
+
+  trap "restore_and_exit ${EXIT_RESTORED_AFTER_SIGNAL}" HUP INT TERM
+
+  # Rename is atomic, so sudo sees one module or the other.
+  if ! mv -f "${PAM_MODULE_PATH}.new" "${PAM_MODULE_PATH}"; then
+    trap - HUP INT TERM
+    rm -f "${SWAPPED_FLAG}"
+    print -r -u2 -- "couldn't move the new module into place"
+
+    return 1
+  fi
+
+  # Only now give the run ID, so the proof can't run against the old module.
+  # Without it the proof never starts, so restore rather than wait it out.
+  if ! print -r -- "${run_id}" > "${SWAPPED_FLAG}"; then
+    trap '' HUP INT TERM
+    print -r -u2 -- "couldn't record the run ID; restoring"
+    restore_and_exit "${EXIT_RESTORED}"
+  fi
+
+  return 0
+}
+
+# Waits up to the limit for the proof, and succeeds only if it arrived.
+#
+# - Signals are ignored from then on, so nothing after this is interrupted part
+#   way through.
+wait_for_proof() {
+  local -i waited=0
+
+  while ((waited < CONFIRM_TIMEOUT_SECONDS)); do
+    if [[ -e "${CONFIRMED_FLAG}" ]]; then
+      break
+    fi
+
     sleep 1
     ((waited += 1))
   done
 
-  # Nothing below should be interrupted part way through.
   trap '' HUP INT TERM
 
-  # Keep the new module only if it was proven.
-  if [[ -e $CONFIRMED_FLAG ]]; then
-    rm -f "$CONFIRMED_FLAG" "$SWAPPED_FLAG"
-    print -r -- "proven after ${waited}s"
-    return 0
+  if [[ ! -e "${CONFIRMED_FLAG}" ]]; then
+    return 1
   fi
 
-  # No proof came, so put back the module that was working.
-  restore_previous || return 5
-  return 3
+  rm -f "${CONFIRMED_FLAG}" "${SWAPPED_FLAG}"
+  print -r -- "proven after ${waited}s"
+
+  return 0
 }
 
-# Refuse anything but exactly what pam-duo-macos-updater passes: removing every
-# allowed character must leave nothing behind.
-#
-# - This avoids =~, which needs zsh/regex, and that module won't load on this
-#   Mac.
-if (($# != 3)) || ((${#2} != 64)) || [[ -n ${2//[0-9a-f]/} ]] \
-  || [[ -z $3 || -n ${3//[0-9a-zA-Z.-]/} ]]; then
-  print -r -u2 -- "Usage: pam-duo-macos-updater-root <module> <checksum> <run-id>"
-  exit 2
-fi
+# Checks the arguments, then does the install and returns its result.
+main() {
+  if ((${#} != 3)); then
+    print -r -u2 -- "${USAGE}"
 
-# Do the install, and report its result as the exit status.
-swap_and_prove "$1" "$2" "$3"
+    return "${EXIT_REFUSED}"
+  fi
+
+  if ! are_arguments_valid "${2}" "${3}"; then
+    print -r -u2 -- "${USAGE}"
+
+    return "${EXIT_REFUSED}"
+  fi
+
+  swap_and_prove "${1}" "${2}" "${3}"
+
+  return $?
+}
+
+main "$@"
 exit $?
