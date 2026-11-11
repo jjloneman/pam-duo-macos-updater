@@ -193,8 +193,8 @@ test_repo_passes() {
   describe "lint.zsh, on this repo"
   test_case "finds nothing and exits 0"
 
-  # When - linting the repo
-  run_lint
+  # When - linting the repo, or the untraced original under coverage
+  run_lint --root "${COVERAGE_REPO_ROOT:-${REPO_ROOT}}"
 
   # Then - there is no output, and the status is 0
   expect_equal "output" "" "${LINT_OUTPUT}"
