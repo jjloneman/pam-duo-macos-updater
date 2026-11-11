@@ -35,6 +35,7 @@ typeset -gr VIEW_DIR
 functions_with_prefix() {
   if ((${#} != 1)); then
     print -r -- "functions_with_prefix needs a prefix" >&2
+
     return 2
   fi
 
@@ -71,6 +72,7 @@ has_anything_to_check() {
 lint_file() {
   if ((${#} != 1)); then
     print -r -- "lint_file needs a path" >&2
+
     return 2
   fi
 
@@ -81,9 +83,14 @@ lint_file() {
   fi
 
   # The exemption is for style only, so security and syntax rules still run.
+  #
+  # - Comments are checked for width too, as renaming the imported code once
+  #   pushed some past 80 columns with nothing to catch it.
   if ((${LEGACY_FILES[(Ie)${1}]})); then
+    check_comment_width
     rule_helper_sources_nothing
     rule_zsh_syntax
+
     return 0
   fi
 
@@ -98,6 +105,7 @@ lint_file() {
 lint_root() {
   if ((${#} != 1)); then
     print -r -- "lint_root needs a directory" >&2
+
     return 2
   fi
 
@@ -106,6 +114,7 @@ lint_root() {
 
   if ! cd -- "${1}"; then
     tool_error "could not enter ${1}"
+
     return 2
   fi
 
@@ -115,6 +124,7 @@ lint_root() {
 
   if ! has_anything_to_check "${#targets}"; then
     tool_error "found nothing to check in ${1}"
+
     return 2
   fi
 
@@ -168,6 +178,24 @@ load_rule_file() {
 # Removes the temporary views.
 remove_views() {
   rm -rf -- "${VIEW_DIR:?}"
+
+  return 0
+}
+
+# Prints any errors or findings, and returns lint's exit status for them.
+report_totals() {
+  if ((TOOL_ERROR_COUNT > 0)); then
+    print -r -- "${TOOL_ERROR_COUNT} errors stopped lint checking" >&2
+
+    return 2
+  fi
+
+  if ((FINDING_COUNT > 0)); then
+    print -r -- "${FINDING_COUNT} findings" >&2
+
+    return 1
+  fi
+
   return 0
 }
 
@@ -179,11 +207,13 @@ main() {
     "") ;;
     --list-rules)
       list_rules
+
       return 0
       ;;
     --root)
       if ((${#} != 2)); then
         print -r -- "usage: lint.zsh --root <directory>" >&2
+
         return 2
       fi
 
@@ -191,23 +221,15 @@ main() {
       ;;
     *)
       print -r -- "usage: lint.zsh [--list-rules | --root <directory>]" >&2
+
       return 2
       ;;
   esac
 
   lint_root "${lint_directory}"
+  report_totals
 
-  if ((TOOL_ERROR_COUNT > 0)); then
-    print -r -- "${TOOL_ERROR_COUNT} errors stopped lint checking" >&2
-    return 2
-  fi
-
-  if ((FINDING_COUNT > 0)); then
-    print -r -- "${FINDING_COUNT} findings" >&2
-    return 1
-  fi
-
-  return 0
+  return "$?"
 }
 
 # zsh skips EXIT on a signal unless the signal's own trap exits.
@@ -220,7 +242,8 @@ load_rule_file scan trim_line
 load_rule_file rules_banned rule_read_uses_r
 load_rule_file rules_layout rule_line_width
 load_rule_file rules_names rule_setopt_names_exist
-load_rule_file rules_order rule_sorted_functions
+load_rule_file rules_tests rule_test_shape
+load_rule_file rules_order rule_sorted_source_lines
 load_rule_file rules_repo rule_zsh_syntax
 
 main "$@"

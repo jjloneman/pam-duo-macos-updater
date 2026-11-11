@@ -20,23 +20,38 @@ typeset -gr REPO_ROOT="${0:A:h:h}"
 
 source "${0:A:h}/helpers.zsh"
 
-# Formats the fixture and compares the result with what's expected.
-main() {
+# Tests that the formatter keeps the safe forms in the fixture.
+test_safe_forms() {
   local expected formatted input_file
   local -i format_status
 
+  describe "formatter, on the safe argument forms"
+  test_case "keeps them intact"
+
+  # Given - an unformatted input, and the output expected from it
   input_file="${REPO_ROOT}/test/fixtures/formatter/input.zsh"
   expected="$(< "${REPO_ROOT}/test/fixtures/formatter/expected.zsh")"
 
+  # When - formatting the input
   # --ignore-path stops .prettierignore, which covers fixtures, skipping it.
   formatted="$(/usr/bin/env PATH="${CALLER_PATH:-${PATH}}" \
     "${REPO_ROOT}/node_modules/.bin/prettier" --ignore-path /dev/null \
     --stdin-filepath "${REPO_ROOT}/test/formatter-fixture.zsh" \
     < "${input_file}" 2>&1)"
   format_status="$?"
-  expect_equal "the formatter runs" "0" "${format_status}"
-  expect_equal "the formatter keeps the safe forms" "${expected}" "${formatted}"
+
+  # Then - the formatter runs, and the output is the expected one
+  expect_equal "status" "0" "${format_status}"
+  expect_equal "output" "${expected}" "${formatted}"
+
+  return 0
+}
+
+# Runs the test and reports the totals.
+main() {
+  test_safe_forms
   finish_checks "formatter"
+
   return "$?"
 }
 

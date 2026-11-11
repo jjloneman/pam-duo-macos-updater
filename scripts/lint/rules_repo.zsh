@@ -7,6 +7,7 @@ typeset -gra OKF_FIELDS=(description generated status tags title type)
 check_header_part() {
   if ((${#} != 2)); then
     print -r -- "check_header_part needs a header and a part" >&2
+
     return 2
   fi
 
@@ -21,6 +22,7 @@ check_header_part() {
 check_record_frontmatter() {
   if ((${#} != 1)); then
     print -r -- "check_record_frontmatter needs a path" >&2
+
     return 2
   fi
 
@@ -31,6 +33,7 @@ check_record_frontmatter() {
 
   if [[ ${record_text} != "---${NEWLINE}"*"${NEWLINE}---"* ]]; then
     report 1 okf_frontmatter "a record needs a frontmatter block"
+
     return 0
   fi
 
@@ -120,6 +123,7 @@ rule_entry_header() {
   check_header_part "${header}" "unset CDPATH"
   check_header_part "${header}" "path=("
   check_header_part "${header}" "hash -r"
+
   return 0
 }
 

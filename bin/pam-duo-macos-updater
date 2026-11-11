@@ -1,0 +1,1462 @@
+#!/bin/zsh -f
+
+# Keep the Duo PAM module that approves sudo, and its private OpenSSL, patched.
+#
+# - Neither comes from Homebrew, because nothing sudo loads may depend on files
+#   this user can write, so `update` can't patch them on its own.
+#
+# - A daily launchd job compares the versions built into the module with the
+#   latest releases, and sends an ntfy alert when one is ready to install.
+#
+# - A release must be public for 7 days before it's installed, the same
+#   supply-chain guard as the pnpm moratorium.
+#
+#   - The newest release past that age is chosen, so a brand-new release doesn't
+#     hold back an older fix.
+#
+#   - --ignore-moratorium skips the wait, for a fix that can't wait.
+#
+# - Only `update` or a person at a terminal installs anything, since it takes
+#   two Duo approvals. A root job doing this alone could break sudo unseen.
+#
+# - An install must prove itself. A root process waits while sudo runs with the
+#   new module and password fallback off, then restores the old module if no
+#   Duo approval comes through.
+#
+# - Every failure exits non-zero and says why, and the daily job also alerts.
+#   `update` and `status` report a daily job that has stopped succeeding.
+#
+# - The part that needs root is in pam-duo-macos-updater-root, run from a
+#   root-owned copy, so editing this file can't make a Duo approval run new code
+#   as root.
+#
+# Usage: pam-duo-macos-updater auto | build | check | install | install-helper
+#        | rebuild
+#
+# - auto: for `update`, reports state and rebuilds if a release is ready.
+#
+# - build: builds and verifies a module, then discards it. Installs nothing.
+#
+# - check: the daily job. Alerts about anything needing attention.
+#
+# - install: creates and loads the daily launchd job.
+#
+# - install-helper: shows changes to pam-duo-macos-updater-root, then installs
+#   it as root.
+#
+# - rebuild: builds, verifies, installs, and proves a new module.
+#
+# - status: prints versions, the daily job's state, and standing alerts.
+#
+# - build and rebuild take --ignore-moratorium, and --reinstall to rebuild even
+#   when up to date, which is also how to test the install and its rollback.
+#
+# See https://github.com/jjloneman/pam-duo-macos-updater for how it works.
+
+# Stop a pipeline on any failure, and treat an unset variable as an error.
+setopt pipe_fail no_unset
+
+# Use the system's tools whatever PATH says, so Homebrew's or anything else's
+# can't change a check's result; Homebrew is only here for `brew info`.
+path=(/usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin)
+
+# Compare dotted versions numerically, so 3.5.10 is newer than 3.5.9.
+autoload -Uz is-at-least
+
+# Hold a lock for as long as this process lives.
+zmodload zsh/system
+
+# Prints a duration in seconds, from words like `days=7 hours=12`, the way
+# toMs takes `{ days: 7, hours: 12 }` in the owner's TypeScript repos.
+#
+# - Units are weeks, days, hours, minutes and seconds, each a whole number.
+#
+# - An unknown unit, a value that isn't a whole number, or no words at all
+#   fails, rather than counting as nothing.
+#
+# - It's defined above the constants, which call it.
+to_seconds() {
+  if ((${#} == 0)); then
+    print -r -u2 -- "to_seconds needs a unit, like days=7"
+
+    return 2
+  fi
+
+  local unit_value unit_word
+  local -i total=0
+
+  for unit_word in "$@"; do
+    unit_value="${unit_word#*=}"
+
+    # Checked before any arithmetic, where a value could run a command.
+    if [[ ${unit_value} != <-> || ${#unit_value} -gt 12 ]]; then
+      print -r -u2 -- "to_seconds: not a whole number: ${unit_word}"
+
+      return 2
+    fi
+
+    case "${unit_word%%=*}" in
+      days)
+        total=$((total + unit_value * 86400))
+        ;;
+      hours)
+        total=$((total + unit_value * 3600))
+        ;;
+      minutes)
+        total=$((total + unit_value * 60))
+        ;;
+      seconds)
+        total=$((total + unit_value))
+        ;;
+      weeks)
+        total=$((total + unit_value * 604800))
+        ;;
+      *)
+        print -r -u2 -- "to_seconds: unknown unit: ${unit_word}"
+
+        return 2
+        ;;
+    esac
+  done
+
+  print -r -- "${total}"
+
+  return 0
+}
+
+# The launchd job, and the hour it runs, after the 09:00 Homebrew job.
+readonly AGENT_LABEL=io.github.jjloneman.pam-duo-macos-updater-check
+readonly CHECK_HOUR=10
+
+# The only PATH a build sees, so nothing in Homebrew can affect it.
+readonly CLEAN_PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+# Root-only markers for the two stages of an install; anyone can see them.
+readonly CONFIRMED_FLAG=/var/run/pam-duo-macos-updater-confirmed
+readonly SWAPPED_FLAG=/var/run/pam-duo-macos-updater-swapped
+
+# launchd's domain for agents in this user's login session.
+readonly DOMAIN="gui/$(id -u)"
+
+# Where Duo publishes each tarball, its checksums, and its release dates.
+readonly DUO_CHECKSUMS_URL=https://duo.com/docs/checksums
+readonly DUO_DOWNLOAD_URL=https://dl.duosecurity.com
+readonly DUO_REPO_URL=https://api.github.com/repos/duosecurity/duo_unix
+readonly DUO_RELEASES_URL=$DUO_REPO_URL/releases
+
+# The root-owned helper that sudo runs, and the copy of it in this repo.
+readonly HELPER_PATH=/usr/local/libexec/pam-duo-macos-updater-root
+readonly HELPER_SOURCE=${${0:A}:h:h}/libexec/pam-duo-macos-updater-root
+
+# This script, resolved, which the launchd job runs.
+readonly SCRIPT_PATH=${0:A}
+
+# Keep this many build logs, so a failure can still be read later.
+readonly KEPT_BUILD_LOGS=5
+
+# Where launchd writes output, and this script keeps what it remembers.
+readonly LOG_DIR=$HOME/Library/Logs/pam-duo-macos-updater
+readonly STATE_DIR=$HOME/.local/state/pam-duo-macos-updater
+
+# A build needs well under this much space, but a full disk fails confusingly.
+readonly MIN_FREE_GB=2
+
+# The installed module.
+readonly MODULE_PATH=/usr/local/lib/pam/pam_duo.so
+
+# How long a release must have been public before it may be installed.
+readonly MORATORIUM_DAYS=7
+
+# Only take fixes from this long-term-support series, so a new major version
+# can't break the build, and warn this long before its support ends.
+readonly OPENSSL_SERIES=3.5
+readonly OPENSSL_SUPPORT_ENDS=2030-04-08
+readonly OPENSSL_SUPPORT_WARNING_DAYS=180
+
+# Where OpenSSL publishes its releases, whose data includes each checksum.
+readonly OPENSSL_REPO_URL=https://api.github.com/repos/openssl/openssl
+readonly OPENSSL_RELEASES_URL=$OPENSSL_REPO_URL/releases
+readonly OPENSSL_SITE_URL=https://github.com/openssl/openssl
+readonly OPENSSL_DOWNLOAD_URL=$OPENSSL_SITE_URL/releases/download
+
+# Repeat an unresolved alert weekly, or daily when the check itself is failing.
+#
+# - Each is assigned, then made read-only, as `readonly x=$(...)` reports
+#   success even when the command inside fails.
+REALERT_SECONDS=$(to_seconds days=7) || exit 2
+REALERT_FAILURE_SECONDS=$(to_seconds hours=20) || exit 2
+readonly REALERT_SECONDS REALERT_FAILURE_SECONDS
+
+# Treat the daily job as broken after this long without a success.
+STALE_CHECK_SECONDS=$(to_seconds days=3) || exit 2
+readonly STALE_CHECK_SECONDS
+
+# The ntfy topic, one line. Required: without it, alerts would silently go
+# nowhere.
+readonly TOPIC_FILE=$HOME/.config/pam-duo-macos-updater/ntfy-topic
+
+# The build's temporary directory, removed when this script exits.
+typeset -g build_dir=""
+
+# The versions a module has built in, set by read_module_versions.
+typeset -g module_duo="" module_openssl=""
+
+# What's installed, the newest release, and the newest past the moratorium,
+# set by load_release_state.
+typeset -g installed_duo="" installed_openssl=""
+typeset -g latest_duo="" latest_openssl=""
+typeset -g latest_duo_published=0 latest_openssl_published=0
+typeset -g eligible_duo="" eligible_openssl=""
+typeset -g duo_listed="" openssl_listed=""
+
+# What to build, set by choose_targets.
+typeset -g target_duo="" target_openssl=""
+
+# The latest failure's message, for the daily job to send as its alert.
+typeset -g last_error=""
+
+# Send an alert, repeating it only after the given interval until it clears.
+#
+# - A failed send is an error, so a dead alert path can't look like all clear.
+#
+# - Never put anything sensitive in a message: the topic is on a public server.
+alert() {
+  # Name the arguments: what the problem is, the text, and how often to repeat.
+  local key=$1 message=$2 interval=$3
+
+  # Each problem's marker file holds when it last alerted.
+  local marker=$STATE_DIR/alerted-$key
+
+  # Log every alert, even one not resent, so the log shows what's standing.
+  log "alert $key: $message"
+
+  # Stay quiet if this problem alerted recently enough.
+  if [[ -r $marker ]] && (($(date +%s) - $(< "$marker") < interval)); then
+    return 0
+  fi
+
+  # A missing topic means alerts can't be delivered, which is itself a failure.
+  if [[ ! -r $TOPIC_FILE ]]; then
+    fail "can't send alert: $TOPIC_FILE is missing"
+    return 1
+  fi
+
+  # -f turns an HTTP error into a failure; retry a brief network problem.
+  if ! curl -fsS --retry 3 --max-time 30 -H "Title: Duo sudo module" \
+    -d "$message" "https://ntfy.sh/$(< "$TOPIC_FILE")" > /dev/null; then
+    fail "can't send alert through ntfy: $message"
+    return 1
+  fi
+
+  # Record the send only once it worked, so a failed one is retried.
+  date +%s > "$marker"
+}
+
+# Rebuild if a release is ready, called by `update`.
+#
+# - A Mac with no module isn't using Duo, which isn't a problem: `update` may
+#   run on Macs that don't.
+#
+# - Returns 1 on any failure, so `update` can say so while carrying on.
+auto() {
+  # Nothing to keep patched without a module.
+  [[ -e $MODULE_PATH ]] || return 0
+
+  # Set to 1 by a warning that shouldn't stop the rest of this.
+  local failed=0
+
+  # Warn if the daily job isn't watching, as alerts then won't arrive.
+  warn_if_unmonitored || failed=1
+
+  # Find out what's installed and available.
+  load_release_state "$(moratorium_cutoff)" || return 1
+
+  # Choose the newest versions allowed.
+  choose_targets || return 1
+
+  # Say what's being held back, so the wait is visible.
+  report_held_releases
+
+  # Warn if the supported OpenSSL series is close to ending.
+  warn_if_series_ending
+
+  # Nothing is ready, so this run is finished.
+  if ! update_ready; then
+    print -r -- "Duo module is up to date: OpenSSL $installed_openssl," \
+      "duo_unix $installed_duo"
+    return $failed
+  fi
+
+  # Something is ready, so build, install, and prove it.
+  rebuild_now || return 1
+  return $failed
+}
+
+# Build the chosen versions, and verify the result, without installing it.
+#
+# - Sets build_dir; the module ends up at $build_dir/pam_duo.so.
+build_module() {
+  # Name the build log passed in.
+  local log=$1
+
+  # List build logs, newest first, then delete all but the most recent.
+  local -a build_logs
+  build_logs=("$LOG_DIR"/build-*.log(Nom))
+  rm -f -- "${(@)build_logs[KEPT_BUILD_LOGS+1,-1]}"
+
+  # Keep the build beside this script's state, where the free space was checked.
+  build_dir=$(mktemp -d "$STATE_DIR/build.XXXXXX")
+
+  # mktemp failing leaves nowhere to work.
+  if [[ -z $build_dir || ! -d $build_dir ]]; then
+    fail "couldn't create a build directory in $STATE_DIR"
+    return 1
+  fi
+
+  # Name the tarballs and where OpenSSL's headers and libraries will land.
+  local openssl_tarball=$build_dir/openssl-$target_openssl.tar.gz
+  local duo_tarball=$build_dir/duo_unix-$target_duo.tar.gz
+  local openssl_root=$build_dir/openssl-staged/usr/local/duo-openssl
+
+  # Look up each checksum, which the download below must match.
+  local openssl_checksum duo_checksum
+  openssl_checksum=$(fetch_openssl_checksum "$target_openssl") || return 1
+  duo_checksum=$(fetch_duo_checksum "$target_duo") || return 1
+
+  # Download and check OpenSSL.
+  print -r -- "Downloading OpenSSL $target_openssl..."
+  download_verified \
+    "$OPENSSL_DOWNLOAD_URL/${openssl_tarball:t:r:r}/${openssl_tarball:t}" \
+    "$openssl_checksum" "$openssl_tarball" || return 1
+
+  # Download and check Duo.
+  print -r -- "Downloading duo_unix $target_duo..."
+  download_verified "$DUO_DOWNLOAD_URL/duo_unix-$target_duo.tar.gz" \
+    "$duo_checksum" "$duo_tarball" || return 1
+
+  # Unpack both next to their tarballs.
+  run_step "$log" "$build_dir" tar zxf "$openssl_tarball" || return 1
+  run_step "$log" "$build_dir" tar zxf "$duo_tarball" || return 1
+
+  # Build OpenSSL so that every path compiled in is root-owned.
+  #
+  # - --openssldir is why OpenSSL's config can't come from a user-writable file.
+  #
+  # - no-module and no-engine drop support for loading extra code.
+  print -r -- "Building OpenSSL, which takes about a minute..."
+  local openssl_source=$build_dir/openssl-$target_openssl
+  run_step "$log" "$openssl_source" ./Configure darwin64-arm64-cc no-shared \
+    no-module no-engine no-tests --prefix=/usr/local/duo-openssl \
+    --openssldir=/etc/duo/ssl || return 1
+  run_step "$log" "$openssl_source" make "-j$(sysctl -n hw.ncpu)" build_libs \
+    || return 1
+
+  # Copy only the headers and libraries into the staging folder.
+  run_step "$log" "$openssl_source" make install_dev \
+    "DESTDIR=$build_dir/openssl-staged" || return 1
+
+  # Build Duo against that OpenSSL.
+  print -r -- "Building duo_unix..."
+  local duo_source=$build_dir/duo_unix-$target_duo
+  run_step "$log" "$duo_source" ./configure --with-pam=/usr/local/lib/pam \
+    --prefix=/usr/local --sysconfdir=/etc/duo "--with-openssl=$openssl_root" \
+    || return 1
+
+  # macOS declares strftime_l in xlocale.h, which Duo doesn't include.
+  run_step "$log" "$duo_source" make 'CPPFLAGS=-include xlocale.h' || return 1
+
+  # Move the module out of the source tree, to a path that's easy to pass on.
+  if ! cp "$duo_source/pam_duo/.libs/pam_duo.so" "$build_dir/pam_duo.so"; then
+    fail "the build finished, but produced no pam_duo.so; see $log"
+    return 1
+  fi
+
+  # Refuse a module that doesn't pass every check.
+  print -r -- "Verifying the module..."
+  verify_module "$build_dir/pam_duo.so" || return 1
+}
+
+# Set the targets to the newest allowed versions, never going backward.
+choose_targets() {
+  # Keep what's installed unless a newer allowed release exists.
+  target_openssl=$(newer_version "$installed_openssl" "$eligible_openssl")
+  target_duo=$(newer_version "$installed_duo" "$eligible_duo")
+}
+
+# Run the daily check, and alert if the check itself fails.
+check() {
+  # Note when this started, as launchd's log has no timestamps of its own.
+  log "check starting"
+
+  # Run the real work; a failure must reach the phone.
+  if ! check_versions; then
+    # Alert with why, at most daily, and fail so launchd records it too.
+    alert check-failed "Daily check failed: $last_error" \
+      "$REALERT_FAILURE_SECONDS"
+    return 1
+  fi
+
+  # It worked, so any earlier failure alert is over.
+  rm -f "$STATE_DIR/alerted-check-failed"
+
+  # Record the success, which `update` and `status` use to spot a dead job.
+  date +%s > "$STATE_DIR/last-check-success"
+
+  # Say how it ended, for the log.
+  log "check finished"
+}
+
+# Compare the module with the latest releases, and alert about what's found.
+check_versions() {
+  # A missing module means sudo isn't protected as expected, so don't skip it.
+  if [[ ! -e $MODULE_PATH ]]; then
+    fail "$MODULE_PATH is missing, so Duo can't be approving sudo"
+    return 1
+  fi
+
+  # Find out what's installed and available.
+  load_release_state "$(moratorium_cutoff)" || return 1
+
+  # Choose the newest versions allowed.
+  choose_targets || return 1
+
+  # Set to 1 by any alert that couldn't be sent, once all have been tried.
+  local failed=0
+
+  # An interrupted install leaves a marker, and may need a person to look.
+  if [[ -e $SWAPPED_FLAG ]]; then
+    alert install-interrupted \
+      "An install didn't finish: run pam-duo-macos-updater status, then test sudo" \
+      "$REALERT_SECONDS" || failed=1
+  else
+    rm -f "$STATE_DIR/alerted-install-interrupted"
+  fi
+
+  # A release that's vanished may have been pulled for a serious reason.
+  if [[ $openssl_listed != true || $duo_listed != true ]]; then
+    alert release-removed "A release in use is no longer listed: OpenSSL \
+$installed_openssl ($openssl_listed), duo_unix $installed_duo ($duo_listed)" \
+      "$REALERT_SECONDS" || failed=1
+  else
+    rm -f "$STATE_DIR/alerted-release-removed"
+  fi
+
+  # A helper that differs may be a pending change, or tampering.
+  if helper_is_current; then
+    rm -f "$STATE_DIR/alerted-helper-problem"
+  else
+    alert helper-problem "$last_error" "$REALERT_SECONDS" || failed=1
+  fi
+
+  # Warn in plenty of time about moving to the next OpenSSL series.
+  if series_ending; then
+    alert series-ending "OpenSSL $OPENSSL_SERIES support ends \
+$OPENSSL_SUPPORT_ENDS: choose its successor in pam-duo-macos-updater" \
+      "$REALERT_SECONDS" || failed=1
+  else
+    rm -f "$STATE_DIR/alerted-series-ending"
+  fi
+
+  # Log what's waiting out the moratorium.
+  report_held_releases
+
+  # The versions are in the key, so a newer release alerts right away rather
+  # than waiting out the repeat interval of the one before it.
+  local ready_key=update-ready-$target_openssl-$target_duo
+
+  # Forget alerts about any other versions, which no longer apply.
+  local marker
+  for marker in "$STATE_DIR"/alerted-update-ready-*(N); do
+    [[ ${marker:t} == "alerted-$ready_key" ]] || rm -f -- "$marker"
+  done
+
+  # Alert when a release is ready to install, or clear that alert when not.
+  if update_ready; then
+    alert "$ready_key" "$(describe_targets). Run update; approve 2 pushes." \
+      "$REALERT_SECONDS" || failed=1
+  else
+    rm -f "$STATE_DIR/alerted-$ready_key"
+  fi
+
+  # Report any alert that couldn't be sent as this check having failed.
+  if ((failed)); then
+    return 1
+  fi
+}
+
+# Print what's going to change, in one line.
+describe_targets() {
+  # OpenSSL and Duo are reported separately, as either can change alone.
+  print -r -- "Ready: OpenSSL $installed_openssl -> $target_openssl," \
+    "duo_unix $installed_duo -> $target_duo"
+}
+
+# Download a file, and delete it unless its checksum matches.
+download_verified() {
+  # Name the arguments: where from, the expected checksum, and where to.
+  local url=$1 checksum=$2 destination=$3
+
+  # -f fails on an HTTP error; retry a brief network problem.
+  if ! curl -fsSL --retry 3 --max-time 600 -o "$destination" "$url"; then
+    fail "couldn't download $url"
+    return 1
+  fi
+
+  # Calculate the checksum of what actually arrived.
+  local actual
+  actual=$(sha256_of "$destination") || return 1
+
+  # A mismatch could be corruption or tampering, and neither should be built.
+  if [[ $actual != "$checksum" ]]; then
+    rm -f -- "$destination"
+    fail "checksum mismatch for $url: expected $checksum, got $actual"
+    return 1
+  fi
+}
+
+# Record a failure's message, and print it for whoever's watching.
+fail() {
+  # The daily job sends this as its alert.
+  last_error=$*
+
+  # Errors go to stderr, so they reach launchd's log and the terminal.
+  print -r -u2 -- "pam-duo-macos-updater: $*"
+
+  # Let callers end with this function's status.
+  return 1
+}
+
+# Print the SHA-256 Duo publishes for a version.
+#
+# - Looked up on Duo's own page, as its release data has no checksums.
+fetch_duo_checksum() {
+  # Name the version wanted.
+  local version=$1
+
+  # Read the whole page, failing on any HTTP error.
+  local page
+  if ! page=$(curl -fsSL --retry 3 --max-time 60 "$DUO_CHECKSUMS_URL"); then
+    fail "couldn't read Duo's checksums from $DUO_CHECKSUMS_URL"
+    return 1
+  fi
+
+  # Each line is the checksum, then whitespace, then the tarball's name.
+  local checksum
+  checksum=$(print -r -- "$page" \
+    | grep -oE "[0-9a-f]{64}[[:space:]]+duo_unix-${version//./\\.}\\.tar\\.gz" \
+    | head -n 1 | cut -d ' ' -f 1)
+
+  # No checksum means nothing to verify against, so don't guess.
+  if [[ -z $checksum ]]; then
+    fail "Duo's page lists no checksum for duo_unix $version"
+    return 1
+  fi
+
+  # Hand it to the caller.
+  print -r -- "$checksum"
+}
+
+# Print the SHA-256 for an OpenSSL version, checked against a second source.
+#
+# - GitHub's release data has it, and Homebrew's is an independent copy, usable
+#   when Homebrew is on the same version.
+fetch_openssl_checksum() {
+  # Name the version wanted.
+  local version=$1
+
+  # Read that release's data, failing on any HTTP error.
+  local release
+  if ! release=$(fetch_url "$OPENSSL_RELEASES_URL/tags/openssl-$version"); then
+    fail "couldn't read OpenSSL $version's release data from GitHub"
+    return 1
+  fi
+
+  # Find the tarball among the assets; .digest reads "sha256:<checksum>".
+  local checksum
+  checksum=$(print -r -- "$release" \
+    | jq -r --arg name "openssl-$version.tar.gz" \
+      '.assets[] | select(.name == $name) | .digest // empty' \
+    | sed -n 's/^sha256://p')
+
+  # A release with no checksum can't be verified, so don't guess.
+  if [[ -z $checksum ]]; then
+    fail "GitHub lists no checksum for OpenSSL $version"
+    return 1
+  fi
+
+  # Ask Homebrew for its copy; .formulae[0] is the one formula asked about.
+  local homebrew_fields=""
+  homebrew_fields=$(brew info --json=v2 openssl@3 2> /dev/null | jq -r \
+    '.formulae[0] | "\(.versions.stable) \(.urls.stable.checksum)"' \
+    2> /dev/null)
+
+  # Disagreement between the two sources is a reason to stop; a Homebrew on
+  # another version, or unavailable, just has nothing to compare.
+  if [[ $homebrew_fields == "$version "* &&
+    $homebrew_fields != "$version $checksum" ]]; then
+    fail "OpenSSL $version's checksums differ between GitHub and Homebrew"
+    return 1
+  fi
+
+  # Hand it to the caller.
+  print -r -- "$checksum"
+}
+
+# Print a URL's body, failing on any HTTP error.
+fetch_url() {
+  # -f fails on an HTTP error, such as GitHub's rate limit; retry a brief
+  # network problem.
+  curl -fsSL --retry 3 --max-time 60 "$1"
+}
+
+# Succeed if the root-owned helper is safe and matches this repo's copy.
+#
+# - Root runs it after a Duo approval, so a difference needs a person's review.
+helper_is_current() {
+  # A missing helper means installs can't run.
+  if [[ ! -e $HELPER_PATH ]]; then
+    fail "$HELPER_PATH is missing: run pam-duo-macos-updater install-helper"
+    return 1
+  fi
+
+  # Anything this user could write would defeat the point of the copy.
+  if [[ $(stat -f '%Su:%Lp' "$HELPER_PATH") != root:755 ||
+  $(stat -f '%Su:%Lp' "${HELPER_PATH:h}") != root:755 ]]; then
+    fail "$HELPER_PATH and its folder must be owned by root, mode 755"
+    return 1
+  fi
+
+  # A difference is either a change waiting for review, or tampering.
+  if ! cmp -s "$HELPER_SOURCE" "$HELPER_PATH"; then
+    fail "$HELPER_PATH differs from the repo: run pam-duo-macos-updater install-helper"
+    return 1
+  fi
+}
+
+# Create the launchd job, and load it fresh.
+install_agent() {
+  # Create the directories launchd and this script write to.
+  mkdir -p "$LOG_DIR" "$STATE_DIR" || return 1
+
+  # Agents are per-machine and generated, so they aren't in the repo.
+  local plist=$HOME/Library/LaunchAgents/$AGENT_LABEL.plist
+
+  # Write the job's settings, as launchd reads nothing else.
+  write_plist "$plist" || return 1
+
+  # Ignore the error when it isn't loaded yet.
+  launchctl bootout "$DOMAIN/$AGENT_LABEL" 2> /dev/null
+
+  # Check the file is well formed before handing it to launchd.
+  if ! plutil -lint -s "$plist"; then
+    fail "generated an invalid $plist"
+    return 1
+  fi
+
+  # Load it; it runs at its next scheduled hour.
+  if ! launchctl bootstrap "$DOMAIN" "$plist"; then
+    fail "launchd refused to load $plist"
+    return 1
+  fi
+
+  # Say what happened and how to look at it.
+  print -r -- "Installed $AGENT_LABEL; see: pam-duo-macos-updater status"
+}
+
+# Show changes to the helper, then install it as root after a Duo approval.
+install_helper() {
+  # Installing takes an approval, which needs someone at a terminal.
+  if [[ ! -t 0 ]]; then
+    fail "installing needs a terminal, for the Duo approval"
+    return 1
+  fi
+
+  # There must be something to install.
+  if [[ ! -r $HELPER_SOURCE ]]; then
+    fail "$HELPER_SOURCE is missing"
+    return 1
+  fi
+
+  # Nothing to do if the installed copy is already right.
+  if helper_is_current 2> /dev/null; then
+    print -r -- "$HELPER_PATH is already current."
+    return 0
+  fi
+
+  # Show what root would be about to run, so it can be reviewed first.
+  if [[ -e $HELPER_PATH ]]; then
+    diff -u "$HELPER_PATH" "$HELPER_SOURCE"
+  fi
+
+  # The approval is the review: its push names this install.
+  print -r -- "Approve this Duo push to install the helper as root:"
+
+  # Create the folder, owned by root.
+  if ! sudo install -d -o root -g wheel -m 755 "${HELPER_PATH:h}"; then
+    fail "couldn't create ${HELPER_PATH:h}"
+    return 1
+  fi
+
+  # -S replaces the file atomically, so nothing runs a half-written copy.
+  if ! sudo install -S -o root -g wheel -m 755 "$HELPER_SOURCE" \
+    "$HELPER_PATH"; then
+    fail "couldn't install $HELPER_PATH"
+    return 1
+  fi
+
+  # Prove the result, rather than assuming it.
+  helper_is_current || return 1
+  print -r -- "Installed $HELPER_PATH."
+}
+
+# Install a verified module with root, then prove sudo works with it.
+#
+# - The helper swaps the module, then stays in the foreground until sudo
+#   succeeds or it times out, and restores the old module if it doesn't.
+#
+# - The proof sets SUDO_ASKPASS to /usr/bin/false and uses -A, so the password
+#   can't stand in for Duo: only a real approval passes.
+install_module() {
+  # Name the arguments: the verified module, and the build log.
+  local module=$1 log=$2
+
+  # Record its checksum, so root can refuse anything changed since verifying.
+  local checksum
+  checksum=$(sha256_of "$module") || return 1
+
+  # Forget any recent approval, so starting an install always takes a new one.
+  sudo -k
+
+  # Authenticate up front, so the helper can start without a prompt.
+  print -r -- "Approve this Duo push to install the new module:"
+  if ! sudo -v; then
+    fail "sudo authentication failed, so nothing was installed"
+    return 1
+  fi
+
+  # Name this run, so a marker left by an earlier one can't be mistaken for it.
+  local run_id=$$.$(date +%s)
+
+  # Start the helper in the background, while the timestamp is fresh.
+  sudo -n "$HELPER_PATH" "$module" "$checksum" "$run_id" >> "$log" 2>&1 &
+  local root_pid=$!
+
+  # Wait for the swap, or for the root process to stop early; it runs as root,
+  # so ps is used here, as kill -0 would be refused.
+  local waited=0
+  while ! swap_is_done "$run_id" && ps -p "$root_pid" > /dev/null \
+    && ((waited < 30)); do
+    sleep 1
+    ((waited += 1))
+  done
+
+  # Without the swap there's nothing to prove, so report how it ended; wait
+  # blocks until it finishes, in case it's only slow.
+  if ! swap_is_done "$run_id"; then
+    local early_status=0
+    wait "$root_pid" || early_status=$?
+    report_helper_failure "$early_status" "$log"
+    return 1
+  fi
+
+  # Forget the earlier approval, so the next sudo has to use the new module.
+  sudo -k
+
+  # Prove it with Duo alone, as the password can't stand in here.
+  print -r -- "Approve this second push to prove the new module works:"
+  SUDO_ASKPASS=/usr/bin/false sudo -A /usr/bin/touch "$CONFIRMED_FLAG" \
+    || print -r -u2 -- "pam-duo-macos-updater: approval failed; waiting for the rollback"
+
+  # Wait for the helper's verdict, and report anything but success.
+  local root_status=0
+  wait "$root_pid" || root_status=$?
+  if ((root_status != 0)); then
+    report_helper_failure "$root_status" "$log"
+    return 1
+  fi
+
+  # Confirm the file in place really is the one that was verified.
+  local installed_checksum
+  installed_checksum=$(sha256_of "$MODULE_PATH") || return 1
+  if [[ $installed_checksum != "$checksum" ]]; then
+    fail "$MODULE_PATH isn't the module just verified: test sudo now"
+    return 1
+  fi
+}
+
+# Set the installed and available versions, given the cutoff for eligibility.
+load_release_state() {
+  # Name the newest publish time a release may have and still be eligible.
+  local cutoff=$1
+
+  # What's in the module is what's actually running, whatever was last built.
+  read_module_versions "$MODULE_PATH" || return 1
+  installed_openssl=$module_openssl
+  installed_duo=$module_duo
+
+  # Read OpenSSL's releases, in its long-term-support series only.
+  local fields
+  fields=$(release_fields "$OPENSSL_RELEASES_URL" openssl- \
+    "^openssl-${OPENSSL_SERIES//./\\.}\\.[0-9]+\$" "$cutoff" \
+    "$installed_openssl") || {
+    fail "couldn't read OpenSSL's releases from GitHub"
+    return 1
+  }
+
+  # Split the five tab-separated fields.
+  IFS=$'\t' read -r latest_openssl latest_openssl_published eligible_openssl \
+    openssl_listed _ <<< "$fields"
+
+  # Read Duo's stable releases.
+  fields=$(release_fields "$DUO_RELEASES_URL" duo_unix- \
+    '^duo_unix-[0-9]+\.[0-9]+\.[0-9]+$' "$cutoff" "$installed_duo") || {
+    fail "couldn't read duo_unix's releases from GitHub"
+    return 1
+  }
+
+  # Split the five tab-separated fields.
+  IFS=$'\t' read -r latest_duo latest_duo_published eligible_duo duo_listed _ \
+    <<< "$fields"
+}
+
+# Print a line with the date, for the logs.
+log() {
+  # -r and -- print the message verbatim.
+  print -r -- "$(date '+%F %T') $*"
+}
+
+# Print the newest publish time that's past the moratorium.
+moratorium_cutoff() {
+  # A release published at or before this moment has waited long enough.
+  print -r -- $(($(date +%s) - $(to_seconds days="$MORATORIUM_DAYS")))
+}
+
+# Print the newer of two versions.
+newer_version() {
+  # An eligible version of "none" never wins, as there's nothing to choose.
+  if [[ $2 == none ]] || is-at-least "$2" "$1"; then
+    print -r -- "$1"
+  else
+    print -r -- "$2"
+  fi
+}
+
+# Check what a build needs, so it fails now rather than minutes in.
+preflight() {
+  # OpenSSL is configured for this exact architecture.
+  if [[ $(uname -m) != arm64 ]]; then
+    fail "the build only targets arm64, not $(uname -m)"
+    return 1
+  fi
+
+  # Without the Command Line Tools, these commands open a dialog and hang.
+  if ! xcode-select -p > /dev/null 2>&1; then
+    fail "the Command Line Tools are missing: run xcode-select --install"
+    return 1
+  fi
+
+  # Every tool used below must be there.
+  local tool
+  for tool in cc curl file jq make nm otool perl shasum strings tar; do
+    if ! whence "$tool" > /dev/null; then
+      fail "$tool is missing, and the build needs it"
+      return 1
+    fi
+  done
+
+  # df -g reports whole gigabytes; field 4 of its last line is what's free.
+  local free_gb
+  free_gb=$(df -g "$STATE_DIR" | awk 'END { print $4 }')
+  if ((free_gb < MIN_FREE_GB)); then
+    fail "only ${free_gb} GB is free, and a build needs $MIN_FREE_GB GB"
+    return 1
+  fi
+}
+
+# Set module_openssl and module_duo from the strings inside a module.
+#
+# - OpenSSL's version text is "OpenSSL 3.5.9 29 Sep 2026". Duo's only appears as
+#   a bare version, so it's the bare version that isn't OpenSSL's.
+#
+# - Anything but exactly one match is an error, rather than a guess.
+read_module_versions() {
+  # Name the module to read.
+  local module=$1
+
+  # Read its text once, as both versions come from it.
+  local text
+  if ! text=$(strings "$module"); then
+    fail "couldn't read $module"
+    return 1
+  fi
+
+  # Find OpenSSL's version text, keeping one copy of each distinct version.
+  local -a openssl_versions
+  openssl_versions=(${(u)${(f)"$(print -r -- "$text" \
+    | sed -nE 's/^OpenSSL ([0-9]+\.[0-9]+\.[0-9]+) .*/\1/p')"}})
+  if ((${#openssl_versions} != 1)); then
+    fail "expected one OpenSSL version in $module, found:" \
+      "${openssl_versions[*]:-none}"
+    return 1
+  fi
+  module_openssl=$openssl_versions[1]
+
+  # Find bare versions, without OpenSSL's, keeping one copy of each.
+  local -a duo_versions
+  duo_versions=(${(u)${(f)"$(print -r -- "$text" \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$module_openssl")"}})
+  if ((${#duo_versions} != 1)); then
+    fail "expected one duo_unix version in $module, found:" \
+      "${duo_versions[*]:-none}"
+    return 1
+  fi
+  module_duo=$duo_versions[1]
+}
+
+# Build, verify, install, and prove a new module right now.
+#
+# - Takes a lock, so two runs can't build or swap at the same time.
+rebuild_now() {
+  # Installing takes approvals, which need someone at a terminal.
+  if [[ ! -t 0 ]]; then
+    fail "installing needs a terminal, for the Duo approvals"
+    return 1
+  fi
+
+  # Fail now, rather than minutes into a build.
+  preflight || return 1
+
+  # Without a safe helper, there's no point building anything.
+  helper_is_current || return 1
+  take_lock || return 1
+
+  # Keep each build's log, named by when it started.
+  local log=$LOG_DIR/build-$(date +%Y%m%d-%H%M%S).log
+
+  # Say what's happening, as this takes minutes.
+  print -r -- "$(describe_targets). Build log: $log"
+
+  # Build and verify before touching anything.
+  build_module "$log" || return 1
+
+  # Install, then prove it.
+  install_module "$build_dir/pam_duo.so" "$log" || return 1
+
+  # The alerts about this update are over.
+  rm -f -- "$STATE_DIR"/alerted-update-ready-*(N)
+
+  # Report the result.
+  log "installed OpenSSL $target_openssl and duo_unix $target_duo"
+}
+
+# Print one line about a repo's releases, as tab-separated fields.
+#
+# - The fields: newest version, when it was published, newest version past the
+#   cutoff (or "none"), and whether the installed version is still listed.
+#
+# - Sorting compares version parts as numbers, as 3.5.10 sorts after 3.5.9.
+release_fields() {
+  # Name the arguments: the releases URL, tag prefix, tag pattern, cutoff, and
+  # the installed version.
+  local url=$1 prefix=$2 pattern=$3 cutoff=$4 installed=$5
+
+  # Read a full page, which covers years of releases.
+  local releases
+  releases=$(fetch_url "$url?per_page=100") || return 1
+
+  # Reduce the list to this series, then pick out the four fields.
+  #
+  # - select drops drafts, prereleases, and other series.
+  #
+  # - fromdateiso8601 turns the publish time into seconds since the epoch.
+  #
+  # - A series with no releases is an error, not "up to date".
+  print -r -- "$releases" | jq -re --arg prefix "$prefix" \
+    --arg pattern "$pattern" --arg installed "$installed" \
+    --argjson cutoff "$cutoff" '
+      [
+        .[]
+        | select((.draft or .prerelease) | not)
+        | select(.tag_name | test($pattern))
+        | {
+            version: (.tag_name | ltrimstr($prefix)),
+            published: (.published_at | fromdateiso8601)
+          }
+      ]
+      | sort_by(.version | split(".") | map(tonumber))
+      | if length == 0 then error("no matching releases") else . end
+      | [
+          last.version,
+          last.published,
+          (map(select(.published <= $cutoff)) | last | .version // "none"),
+          (map(.version) | index($installed) != null)
+        ]
+      | @tsv
+    '
+}
+
+# Say how the helper ended, using its documented exit statuses.
+report_helper_failure() {
+  # Name the arguments: its status, and the log holding its output.
+  local helper_status=$1 log=$2
+
+  # Each status means something different has happened to the module.
+  case $helper_status in
+    2) fail "the install was refused, so nothing changed; see $log" ;;
+    3) fail "no Duo approval arrived, so the old module was restored" ;;
+    4) fail "the install was interrupted, so the old module was restored" ;;
+    5) fail "RESTORE FAILED: test sudo now, and see the playbook; log: $log" ;;
+    *) fail "the helper ended with status $helper_status: test sudo; $log" ;;
+  esac
+
+  # Show the helper's own words, so nobody has to go looking for them.
+  tail -n 5 "$log" >&2
+}
+
+# Print one release if it's newer than what's going to be installed.
+report_held_release() {
+  # Name the arguments: the product, newest release, its time, and the target.
+  local name=$1 latest=$2 published=$3 target=$4
+
+  # Nothing is being held back if the target is already the newest.
+  is-at-least "$latest" "$target" && return 0
+
+  # date -r reads seconds since the epoch; -v adds the waiting period.
+  local eligible_on
+  eligible_on=$(date -r "$published" -v "+${MORATORIUM_DAYS}d" +%F)
+
+  # Say when it can be installed.
+  print -r -- "$name $latest is held by the $MORATORIUM_DAYS-day moratorium" \
+    "until $eligible_on."
+}
+
+# Print any newer release that's still waiting out the moratorium.
+report_held_releases() {
+  # Check OpenSSL and Duo the same way.
+  report_held_release OpenSSL "$latest_openssl" "$latest_openssl_published" \
+    "$target_openssl"
+  report_held_release duo_unix "$latest_duo" "$latest_duo_published" \
+    "$target_duo"
+}
+
+# Run one build step with a clean environment, logging all of its output.
+run_step() {
+  # Name the arguments: the log and directory, then the command.
+  local log=$1 directory=$2
+  shift 2
+
+  # Say what's running, so the log reads in order.
+  print -r -- "+ $*" >> "$log"
+
+  # env -i stops settings such as CFLAGS or OPENSSL_CONF reaching the build;
+  # the subshell keeps this script in its own directory.
+  if ! (cd "$directory" && env -i "HOME=$HOME" "PATH=$CLEAN_PATH" LC_ALL=C \
+    "$@") >> "$log" 2>&1; then
+    # Show the error here, so nobody has to go looking for it.
+    tail -n 20 "$log" >&2
+    fail "build step failed: $*; full log: $log"
+    return 1
+  fi
+}
+
+# Succeed if OpenSSL's series is close to the end of its support.
+series_ending() {
+  # -j and -f parse the date without changing the clock.
+  local ends
+  ends=$(date -j -f %F "$OPENSSL_SUPPORT_ENDS" +%s)
+
+  # Compare it with the warning period from now.
+  (($(date +%s) + OPENSSL_SUPPORT_WARNING_DAYS * 24 * 60 * 60 >= ends))
+}
+
+# Print a file's SHA-256.
+sha256_of() {
+  # Keep only the checksum, which comes first in shasum's output.
+  local line
+  if ! line=$(shasum -a 256 "$1"); then
+    fail "couldn't read $1 to calculate its checksum"
+    return 1
+  fi
+  print -r -- "${line%% *}"
+}
+
+# Print the versions, the daily job, and anything needing attention.
+status() {
+  # A Mac with no module has nothing else to report.
+  if [[ ! -e $MODULE_PATH ]]; then
+    print -r -- "$MODULE_PATH is not installed"
+    return 0
+  fi
+
+  # Set to 1 by any problem, so scripts can rely on the exit status.
+  local failed=0
+
+  # Report the module, which works with no network.
+  if read_module_versions "$MODULE_PATH"; then
+    print -r -- "installed: OpenSSL $module_openssl, duo_unix $module_duo"
+  else
+    failed=1
+  fi
+
+  # Report what's available, which needs the network.
+  if load_release_state "$(moratorium_cutoff)" && choose_targets; then
+    print -r -- "newest allowed: OpenSSL $target_openssl, duo_unix $target_duo"
+    report_held_releases
+    warn_if_series_ending
+  else
+    failed=1
+  fi
+
+  # Report the daily job's state and last result, one tab into launchd's output.
+  print -r -- "--- $AGENT_LABEL"
+  launchctl print "$DOMAIN/$AGENT_LABEL" 2> /dev/null \
+    | grep -E $'^\t(state|runs|last exit code) =' \
+    | sed 's/^[[:space:]]*//'
+
+  # Warn if it isn't loaded, or hasn't succeeded lately.
+  warn_if_unmonitored || failed=1
+
+  # Report a helper that's missing, unsafe, or different.
+  helper_is_current || failed=1
+
+  # Report an install that never finished.
+  if [[ -e $SWAPPED_FLAG ]]; then
+    print -r -- "WARNING: an install didn't finish, so test sudo now"
+    failed=1
+  fi
+
+  # Show any alerts still standing.
+  local marker
+  for marker in "$STATE_DIR"/alerted-*(N); do
+    print -r -- "ALERT standing: ${marker:t:s/alerted-/}"
+  done
+
+  # Show the end of the daily job's log.
+  print -r -- "--- $LOG_DIR/check.log"
+  tail -n 5 "$LOG_DIR/check.log" 2> /dev/null
+
+  # Report whether everything was fine.
+  return $failed
+}
+
+# Succeed if the helper has marked the swap for this particular run.
+swap_is_done() {
+  # An unreadable marker counts as not done; a marker from another run holds
+  # a different ID, so it can't be mistaken for this one.
+  [[ -r $SWAPPED_FLAG && $(< "$SWAPPED_FLAG") == "$1" ]]
+}
+
+# Take this script's lock, held until the process exits.
+take_lock() {
+  # zsystem only opens an existing file, so make sure there is one.
+  local lock_file=$STATE_DIR/lock
+  if ! touch "$lock_file"; then
+    fail "couldn't create the lock file $lock_file"
+    return 1
+  fi
+
+  # -t 0 fails at once rather than waiting, and -f stores the file descriptor.
+  local lock_descriptor
+  if ! zsystem flock -t 0 -f lock_descriptor "$lock_file" 2> /dev/null; then
+    fail "another pam-duo-macos-updater is already running"
+    return 1
+  fi
+}
+
+# Succeed if a target differs from what's installed.
+update_ready() {
+  # Either one changing means building a new module.
+  [[ $target_openssl != "$installed_openssl" ||
+    $target_duo != "$installed_duo" ]]
+}
+
+# Verify a module before anything as privileged as sudo loads it.
+verify_module() {
+  # Name the module to check.
+  local module=$1
+
+  # It must be for this Mac's architecture.
+  if [[ $(file -b "$module") != *arm64* ]]; then
+    fail "$module isn't an arm64 module"
+    return 1
+  fi
+
+  # Every library it loads must be one of macOS's own, skipping otool's first
+  # line, which names the module itself.
+  #
+  # - otool runs separately, as an empty result from a failed tool would look
+  #   the same as a clean one.
+  local libraries
+  if ! libraries=$(otool -L "$module"); then
+    fail "couldn't list the libraries $module loads"
+    return 1
+  fi
+  local -a user_libraries
+  user_libraries=(${(f)"$(print -r -- "$libraries" | tail -n +2 \
+    | grep -v '^[[:space:]]*/usr/lib/')"})
+  if ((${#user_libraries})); then
+    fail "$module loads libraries outside /usr/lib: ${user_libraries[*]}"
+    return 1
+  fi
+
+  # Nothing built in may point somewhere this user can write, as OpenSSL could
+  # load a config from it, and a config can load code.
+  #
+  # - strings runs separately too, for the same reason as otool above.
+  local text
+  if ! text=$(strings "$module") || [[ -z $text ]]; then
+    fail "couldn't read the text inside $module"
+    return 1
+  fi
+  local -a writable_paths
+  writable_paths=(${(f)"$(print -r -- "$text" \
+    | grep -E '/opt/homebrew|/Users/|duo-build|Cellar|/usr/local/Homebrew')"})
+  if ((${#writable_paths})); then
+    fail "$module has user-writable paths built in: ${writable_paths[1]}"
+    return 1
+  fi
+
+  # OpenSSL's config must come from the root-owned location, not any default.
+  #
+  # - grep -q would stop reading early, which pipe_fail reports as a failure.
+  local openssl_directory='OPENSSLDIR: "/etc/duo/ssl"'
+  if ! print -r -- "$text" | grep -F "$openssl_directory" > /dev/null; then
+    fail "$module's OpenSSL config isn't under /etc/duo/ssl"
+    return 1
+  fi
+
+  # It must be the versions that were asked for.
+  read_module_versions "$module" || return 1
+  if [[ $module_openssl != "$target_openssl" ||
+    $module_duo != "$target_duo" ]]; then
+    fail "$module has OpenSSL $module_openssl and duo_unix $module_duo," \
+      "not $target_openssl and $target_duo"
+    return 1
+  fi
+
+  # It must export what sudo calls; nm lists exports with a leading underscore.
+  if ! nm -gU "$module" | grep ' _pam_sm_authenticate$' > /dev/null; then
+    fail "$module doesn't export pam_sm_authenticate"
+    return 1
+  fi
+
+  # It must really load, the way sudo will load it.
+  verify_module_loads "$module" || return 1
+}
+
+# Load a module in a small test program, as sudo would.
+#
+# - Catches a module that links but won't load, before it can break sudo.
+verify_module_loads() {
+  # Name the module to load.
+  local module=$1
+
+  # Compile beside it, so the temporary files are removed with the build.
+  local tester=${module:h}/load-tester
+
+  # RTLD_NOW resolves every symbol immediately, as any failure should show now.
+  if ! cc -x c -o "$tester" - << 'EOF'; then
+#include <dlfcn.h>
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+  void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (handle == NULL) {
+    fprintf(stderr, "%s\n", dlerror());
+    return 1;
+  }
+  return dlsym(handle, "pam_sm_authenticate") == NULL;
+}
+EOF
+    fail "couldn't compile the module load test"
+    return 1
+  fi
+
+  # Run it, with no inherited settings that could change what loads.
+  if ! env -i "$tester" "$module"; then
+    fail "$module doesn't load, so sudo couldn't load it either"
+    return 1
+  fi
+}
+
+# Print a warning if OpenSSL's series is close to the end of its support.
+warn_if_series_ending() {
+  # Nothing to say while it has plenty of time left.
+  series_ending || return 0
+
+  # Say what's needed, as OPENSSL_SERIES has to be changed by hand.
+  print -r -- "WARNING: OpenSSL $OPENSSL_SERIES support ends" \
+    "$OPENSSL_SUPPORT_ENDS; choose its successor in pam-duo-macos-updater."
+}
+
+# Warn if the daily job isn't watching, returning 1 if so.
+#
+# - A job that never runs can't alert about itself, so `update` and `status`
+#   have to notice instead.
+warn_if_unmonitored() {
+  # Set to 1 by any problem found.
+  local failed=0
+
+  # A job that isn't loaded never runs.
+  if ! launchctl print "$DOMAIN/$AGENT_LABEL" > /dev/null 2>&1; then
+    print -r -u2 -- "WARNING: $AGENT_LABEL isn't loaded, so no Duo alerts" \
+      "will arrive. Fix it with: pam-duo-macos-updater install"
+    failed=1
+  fi
+
+  # A job that's loaded, but failing, is just as blind.
+  local marker=$STATE_DIR/last-check-success
+  if [[ ! -r $marker ]]; then
+    # With no success on record, measure from when the job was installed, so a
+    # job that has never worked can't stay quiet forever.
+    local plist=$HOME/Library/LaunchAgents/$AGENT_LABEL.plist installed_at=0
+    [[ -e $plist ]] && installed_at=$(stat -f %m "$plist")
+    if (($(date +%s) - installed_at > STALE_CHECK_SECONDS)); then
+      print -r -u2 -- "WARNING: the daily Duo check has never succeeded." \
+        "See: pam-duo-macos-updater status"
+      failed=1
+    else
+      print -r -- "The daily Duo check hasn't succeeded yet."
+    fi
+  elif (($(date +%s) - $(< "$marker") > STALE_CHECK_SECONDS)); then
+    print -r -u2 -- "WARNING: the daily Duo check last succeeded on" \
+      "$(date -r "$(< "$marker")" +%F). See: pam-duo-macos-updater status"
+    failed=1
+  fi
+
+  # Tell the caller whether anything was wrong.
+  return $failed
+}
+
+# Write the launchd job's plist.
+write_plist() {
+  # The paths come from where the repo and home are, so escape what XML reads
+  # as markup, or a folder named with & or < breaks the plist.
+  local log_dir=${${${LOG_DIR//&/&amp;}//</&lt;}//>/&gt;}
+  local script_path=${${${SCRIPT_PATH//&/&amp;}//</&lt;}//>/&gt;}
+
+  # launchd reads nothing else, so all of the job's settings go here.
+  cat > "$1" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<!-- Generated by pam-duo-macos-updater install; edit the script instead -->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>$AGENT_LABEL</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/zsh</string>
+      <string>-f</string>
+      <string>${script_path}</string>
+      <string>check</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>$CHECK_HOUR</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>${log_dir}/check.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${log_dir}/check.log</string>
+  </dict>
+</plist>
+EOF
+}
+
+# Remove the build's temporary directory when this script exits.
+#
+# - Only the main shell does this, as a subshell exiting mustn't remove it.
+zshexit() {
+  # Nothing to do in a subshell, or if no build started.
+  ((ZSH_SUBSHELL == 0)) || return 0
+
+  # Only ever remove a directory this script created under its own state.
+  [[ $build_dir == "$STATE_DIR"/build.* && -d $build_dir ]] || return 0
+
+  # The module has been installed or discarded by now.
+  rm -rf -- "$build_dir"
+}
+
+# Make sure there's somewhere to keep state and logs, or stop here and say so.
+if ! mkdir -p "$STATE_DIR" "$LOG_DIR"; then
+  print -r -u2 -- "pam-duo-macos-updater: couldn't create $STATE_DIR or $LOG_DIR"
+  exit 1
+fi
+
+# Read the subcommand, then the options for those that take any.
+command=${1:-}
+ignore_moratorium=false
+reinstall=false
+[[ $# -gt 0 ]] && shift
+for option in "$@"; do
+  case $option in
+    --ignore-moratorium) ignore_moratorium=true ;;
+    --reinstall) reinstall=true ;;
+    *)
+      print -r -u2 -- "pam-duo-macos-updater: unknown option: $option"
+      exit 2
+      ;;
+  esac
+done
+
+# Dispatch on the subcommand.
+case $command in
+  auto) auto ;;
+  check) check ;;
+  install) install_agent ;;
+  install-helper) install_helper ;;
+  status) status ;;
+  build | rebuild)
+    # Reading the current state needs the module, which must already exist.
+    if [[ ! -e $MODULE_PATH ]]; then
+      fail "$MODULE_PATH isn't installed yet; follow the playbook first"
+      exit 1
+    fi
+
+    # When asked to skip the moratorium, every release so far counts as old.
+    if [[ $ignore_moratorium == true ]]; then
+      print -r -- "Ignoring the $MORATORIUM_DAYS-day moratorium, as requested."
+      cutoff=$(date +%s)
+    else
+      cutoff=$(moratorium_cutoff)
+    fi
+
+    # Find out what's installed and available, then choose the targets.
+    load_release_state "$cutoff" || exit 1
+    choose_targets || exit 1
+    report_held_releases
+
+    # Stop if there's nothing to do, unless a rebuild was asked for anyway.
+    if ! update_ready && [[ $reinstall != true ]]; then
+      print -r -- "Already up to date: OpenSSL $installed_openssl," \
+        "duo_unix $installed_duo. Use --reinstall to rebuild anyway."
+      exit 0
+    fi
+
+    # `rebuild` installs; `build` stops at a verified module.
+    if [[ $command == rebuild ]]; then
+      rebuild_now
+    else
+      preflight || exit 1
+      take_lock || exit 1
+      log_file=$LOG_DIR/build-$(date +%Y%m%d-%H%M%S).log
+      print -r -- "$(describe_targets). Build log: $log_file"
+      build_module "$log_file" || exit 1
+      print -r -- "Built and verified. Nothing was installed."
+    fi
+    ;;
+  *)
+    print -r -u2 -- "Usage: pam-duo-macos-updater auto|build|check|install|rebuild|status"
+    print -r -u2 -- "       pam-duo-macos-updater install-helper"
+    print -r -u2 -- "       build, rebuild: [--ignore-moratorium] [--reinstall]"
+    exit 2
+    ;;
+esac

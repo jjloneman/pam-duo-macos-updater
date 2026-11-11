@@ -1,0 +1,5 @@
+# Imported code that keeps its old style until it's converted. Issue 3 removes
+# the script and the helper, and issue 4 removes the harness and this list.
+bin/pam-duo-macos-updater
+libexec/pam-duo-macos-updater-root
+test/pam-duo-macos-updater.test.zsh

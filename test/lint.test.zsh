@@ -15,177 +15,265 @@ typeset -gr FIXTURE_DIR="${REPO_ROOT}/test/fixtures"
 typeset -gr LINT_COMMAND="${REPO_ROOT}/scripts/lint.zsh"
 
 source "${0:A:h}/helpers.zsh"
+source "${0:A:h}/lint_helpers.zsh"
 
-# Checks lint's exit codes, which the hooks and CI rely on.
-check_exit_codes() {
-  local probe_root
-  local -i lint_status
+# Tests the exit codes the hooks and CI rely on.
+test_exit_codes() {
+  describe "lint.zsh, exit codes"
+  test_case "exits 1 on findings"
 
-  "${LINT_COMMAND}" --root "${FIXTURE_DIR}/lint/no_echo/bad" > /dev/null 2>&1
-  lint_status="$?"
-  expect_equal "findings exit 1" "1" "${lint_status}"
-  "${LINT_COMMAND}" --root /nonexistent-lint-root > /dev/null 2>&1
-  lint_status="$?"
-  expect_equal "a missing root exits 2" "2" "${lint_status}"
-  "${LINT_COMMAND}" --root > /dev/null 2>&1
-  lint_status="$?"
-  expect_equal "--root with no directory exits 2" "2" "${lint_status}"
+  # When - linting a tree with an echo in it
+  run_lint --root "${FIXTURE_DIR}/lint/no_echo/bad"
 
-  if ! probe_root="$(mktemp -d "${${TMPDIR:-/tmp}%/}/lint-test.XXXXXX")"; then
-    fail_check "the exit code checks need a folder" "mktemp failed"
-    return 0
-  fi
+  # Then - the status is 1
+  expect_equal "status" "1" "${LINT_STATUS}"
 
-  "${LINT_COMMAND}" --root "${probe_root}" > /dev/null 2>&1
-  lint_status="$?"
-  expect_equal "an empty root exits 2" "2" "${lint_status}"
-  mkdir -p -- "${probe_root}/bin"
-  print -r -- "print -r -- ok" > "${probe_root}/bin/tool"
-  chmod 000 "${probe_root}/bin/tool"
-  "${LINT_COMMAND}" --root "${probe_root}" > /dev/null 2>&1
-  lint_status="$?"
-  expect_equal "an unreadable file exits 2" "2" "${lint_status}"
-  chmod 644 "${probe_root}/bin/tool"
-  rm -rf -- "${probe_root:?}"
+  test_case "exits 2 on a missing root"
+
+  # When - linting a folder that doesn't exist
+  run_lint --root /nonexistent-lint-root
+
+  # Then - the status is 2
+  expect_equal "status" "2" "${LINT_STATUS}"
+
+  test_case "exits 2 on --root with no directory"
+
+  # When - passing --root alone
+  run_lint --root
+
+  # Then - the status is 2
+  expect_equal "status" "2" "${LINT_STATUS}"
+
   return 0
 }
 
-# Checks that a failed grep counts as an error, not as no findings.
-check_grep_failure() {
+# Tests that lint exits 2 on an empty root.
+test_exit_codes_on_an_empty_root() {
+  describe "lint.zsh, exit codes"
+  test_case "exits 2 on an empty root"
+
+  # Given - an empty folder
+  if ! make_probe_root; then
+    return 0
+  fi
+
+  # When - linting it
+  run_lint --root "${PROBE_ROOT}"
+
+  # Then - the status is 2
+  expect_equal "status" "2" "${LINT_STATUS}"
+
+  # Cleanup
+  rm -rf -- "${PROBE_ROOT:?}"
+
+  return 0
+}
+
+# Tests that lint exits 2 on an unreadable file.
+test_exit_codes_on_an_unreadable_file() {
+  describe "lint.zsh, exit codes"
+  test_case "exits 2 on an unreadable file"
+
+  # Given - a folder holding a file nobody can read
+  if ! make_probe_root; then
+    return 0
+  fi
+
+  mkdir -p -- "${PROBE_ROOT}/bin"
+  print -r -- "print -r -- ok" > "${PROBE_ROOT}/bin/tool"
+  chmod 000 "${PROBE_ROOT}/bin/tool"
+
+  # When - linting it
+  run_lint --root "${PROBE_ROOT}"
+
+  # Then - the status is 2
+  expect_equal "status" "2" "${LINT_STATUS}"
+
+  # Cleanup
+  chmod 644 "${PROBE_ROOT}/bin/tool"
+  rm -rf -- "${PROBE_ROOT:?}"
+
+  return 0
+}
+
+# Tests that a failed grep counts as an error, not as no findings.
+test_grep_failure() {
   local error_count
 
+  describe "scan.zsh, report_pattern"
+  test_case "counts a failed grep as a tool error"
+
+  # When - reporting a pattern against a views folder that doesn't exist
   error_count="$(
     source "${REPO_ROOT}/scripts/lint/scan.zsh"
     typeset -g VIEW_DIR=/nonexistent-lint-views
     report_pattern probe code 'a' 'message' 2> /dev/null
     print -r -- "${TOOL_ERROR_COUNT}"
   )"
-  expect_equal "a failed grep is a tool error" "1" "${error_count}"
+
+  # Then - one tool error was counted
+  expect_equal "tool errors" "1" "${error_count}"
+
   return 0
 }
 
-# Checks that the legacy list exempts style, but not syntax.
-check_legacy_list() {
-  local helper_output exempt_output syntax_output
-  local legacy_root="${FIXTURE_DIR}/legacy"
+# Tests that the legacy list exempts style, but not syntax.
+test_legacy_list() {
+  describe "lint.zsh, with a legacy list"
+  test_case "skips style rules for a listed file"
 
-  exempt_output="$("${LINT_COMMAND}" --root "${legacy_root}/exempt" 2>&1)"
-  expect_equal "a listed file skips style rules" "" "${exempt_output}"
-  syntax_output="$("${LINT_COMMAND}" --root "${legacy_root}/syntax" 2>&1)"
-  expect_contains "a listed file still gets zsh -n" ": zsh_syntax: " \
-    "${syntax_output}"
-  helper_output="$("${LINT_COMMAND}" --root "${legacy_root}/helper" 2>&1)"
-  expect_contains "a listed helper still can't source" \
-    ": helper_sources_nothing: " "${helper_output}"
+  # When - linting a listed file with style problems
+  run_lint --root "${FIXTURE_DIR}/legacy/exempt"
+
+  # Then - lint says nothing
+  expect_equal "output" "" "${LINT_OUTPUT}"
+
+  test_case "still runs zsh -n on a listed file"
+
+  # When - linting a listed file with a syntax error
+  run_lint --root "${FIXTURE_DIR}/legacy/syntax"
+
+  # Then - lint reports the syntax error
+  expect_contains "output" ": zsh_syntax: " "${LINT_OUTPUT}"
+
+  test_case "still refuses a listed helper that sources"
+
+  # When - linting a listed helper that sources a file
+  run_lint --root "${FIXTURE_DIR}/legacy/helper"
+
+  # Then - lint reports it
+  expect_contains "output" ": helper_sources_nothing: " "${LINT_OUTPUT}"
+
+  test_case "still checks a listed file's comment width"
+
+  # When - linting a listed file with a comment over 80 columns
+  run_lint --root "${FIXTURE_DIR}/legacy/comment-width"
+
+  # Then - lint reports both comments, and not the plain code
+  expect_contains "comment" "bin/old:2: line_width: " "${LINT_OUTPUT}"
+  expect_contains "trailing comment" "bin/old:4: line_width: " \
+    "${LINT_OUTPUT}"
+  expect_missing "code" "bin/old:3:" "${LINT_OUTPUT}"
+  expect_missing "long code, short comment" "bin/old:5:" "${LINT_OUTPUT}"
+
   return 0
 }
 
-# Checks that lint refuses to run with a rule file missing.
-check_missing_rule_file() {
-  local probe_root
-  local -i lint_status
+# Tests that lint refuses to run with a rule file missing.
+test_missing_rule_file() {
+  local lint_status
 
-  if ! probe_root="$(mktemp -d "${${TMPDIR:-/tmp}%/}/lint-test.XXXXXX")"; then
-    fail_check "the rule file check needs a folder" "mktemp failed"
+  describe "lint.zsh, with a rule file missing"
+  test_case "exits 2"
+
+  # Given - a copy of scripts/ without rules_banned.zsh
+  if ! make_probe_root; then
     return 0
   fi
 
-  cp -R -- "${REPO_ROOT}/scripts" "${probe_root}/scripts"
-  rm -f -- "${probe_root}/scripts/lint/rules_banned.zsh"
-  "${probe_root}/scripts/lint.zsh" --root "${FIXTURE_DIR}/lint/no_echo/bad" \
+  cp -R -- "${REPO_ROOT}/scripts" "${PROBE_ROOT}/scripts"
+  rm -f -- "${PROBE_ROOT}/scripts/lint/rules_banned.zsh"
+
+  # When - linting a tree with the copy
+  "${PROBE_ROOT}/scripts/lint.zsh" --root "${FIXTURE_DIR}/lint/no_echo/bad" \
     > /dev/null 2>&1
   lint_status="$?"
-  expect_equal "a missing rule file exits 2" "2" "${lint_status}"
-  rm -rf -- "${probe_root:?}"
+
+  # Then - the status is 2
+  expect_equal "status" "2" "${lint_status}"
+
+  # Cleanup
+  rm -rf -- "${PROBE_ROOT:?}"
+
   return 0
 }
 
-# Checks that the repo passes its own lint with no warnings.
-check_repo_passes() {
-  local repo_output
+# Tests that the repo passes its own lint with no warnings.
+test_repo_passes() {
+  describe "lint.zsh, on this repo"
+  test_case "finds nothing and exits 0"
 
-  local -i repo_status
+  # When - linting the repo
+  run_lint
 
-  repo_output="$("${LINT_COMMAND}" 2>&1)"
-  repo_status="$?"
-  expect_equal "the repo passes its own lint" "" "${repo_output}"
-  expect_equal "the repo's lint exits 0" "0" "${repo_status}"
+  # Then - there is no output, and the status is 0
+  expect_equal "output" "" "${LINT_OUTPUT}"
+  expect_equal "status" "0" "${LINT_STATUS}"
+
   return 0
 }
 
-# Checks one rule's bad and good fixtures.
-check_rule_fixture() {
+# Tests one rule's bad and good fixtures.
+test_rule_fixture() {
   if ((${#} != 1)); then
-    print -r -- "check_rule_fixture needs a rule name" >&2
+    print -r -- "test_rule_fixture needs a rule name" >&2
+
     return 2
   fi
 
   local -a bad_trees good_trees
-  local rule_name="${1}" tree_output tree_path
-  local -i tree_status
   local rule_root="${FIXTURE_DIR}/lint/${1}"
 
+  describe "lint.zsh, rule ${1}"
+  test_case "has a bad tree and a good tree"
+
+  # When - listing the rule's fixture trees
   bad_trees=("${rule_root}"/bad*(/N))
   good_trees=("${rule_root}"/good*(/N))
 
+  # Then - there is at least one of each
   if ((${#bad_trees} == 0 || ${#good_trees} == 0)); then
-    fail_check "${1} needs a bad and a good tree" "${rule_root}"
+    fail_check "trees" "${rule_root}"
+
     return 0
   fi
 
-  # Every tree stands alone, so an easy form can't hide a missed hard one.
-  for tree_path in "${bad_trees[@]}"; do
-    tree_output="$("${LINT_COMMAND}" --root "${tree_path}" 2>&1)"
-    tree_status="$?"
-    expect_equal "${1} scans ${tree_path:t}" "1" "${tree_status}"
-    expect_contains "${1} catches ${tree_path:t}" ": ${rule_name}: " \
-      "${tree_output}"
-  done
-
-  # A good tree can hold other findings, but must have been checked.
-  for tree_path in "${good_trees[@]}"; do
-    tree_output="$("${LINT_COMMAND}" --root "${tree_path}" 2>&1)"
-    tree_status="$?"
-    expect_missing "${1} checks ${tree_path:t}" "lint error" "${tree_output}"
-    expect_equal "${1} scans ${tree_path:t}" "1" "$((tree_status <= 1))"
-    expect_missing "${1} passes ${tree_path:t}" ": ${rule_name}: " \
-      "${tree_output}"
-  done
+  test_bad_trees "${1}" "${bad_trees[@]}"
+  test_good_trees "${1}" "${good_trees[@]}"
 
   return 0
 }
 
-# Checks that the rules and fixtures match, so no rule goes untested.
-check_rules_have_fixtures() {
+# Tests that the rules and fixtures match, so no rule goes untested.
+test_rules_have_fixtures() {
   local -a fixture_names rule_names
 
+  describe "lint.zsh, rule list"
+  test_case "has a fixture for every rule, and a rule for every fixture"
+
+  # When - listing the rules and the fixture folders
   rule_names=("${(@f)$("${LINT_COMMAND}" --list-rules)}")
   fixture_names=("${FIXTURE_DIR}"/lint/*(/N:t))
 
   # Sort first, because (o) and (j) together in quotes join without sorting.
   rule_names=("${(@o)rule_names}")
   fixture_names=("${(@o)fixture_names}")
-  expect_equal "every rule has a fixture, and every fixture a rule" \
-    "${(j: :)rule_names}" "${(j: :)fixture_names}"
+
+  # Then - the two lists are the same
+  expect_equal "names" "${(j: :)rule_names}" "${(j: :)fixture_names}"
+
   return 0
 }
 
-# Runs every check and reports the totals.
+# Runs every test and reports the totals.
 main() {
   local fixture_path
 
-  check_rules_have_fixtures
+  test_rules_have_fixtures
 
   for fixture_path in "${FIXTURE_DIR}"/lint/*(/N); do
-    check_rule_fixture "${fixture_path:t}"
+    test_rule_fixture "${fixture_path:t}"
   done
 
-  check_exit_codes
-  check_grep_failure
-  check_legacy_list
-  check_missing_rule_file
-  check_repo_passes
+  test_exit_codes
+  test_exit_codes_on_an_empty_root
+  test_exit_codes_on_an_unreadable_file
+  test_grep_failure
+  test_legacy_list
+  test_missing_rule_file
+  test_repo_passes
   finish_checks "lint"
+
   return "$?"
 }
 

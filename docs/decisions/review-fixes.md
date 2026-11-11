@@ -1,10 +1,11 @@
 ---
 type: Decision
 title: Fixes found in review
-description: What six code reviews and the owner's review found wrong in this repo's lint and test tooling, what prevents each now, and how that's verified, so similar work can fail faster.
+description: What code reviews and the owner's review found wrong in this repo's lint, test and coverage tooling, what prevents each now, and how that's verified, so similar work can fail faster.
 tags: [linting, review, testing, zsh]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-09T21:00:00Z }
+verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
 ---
 
 # Fixes found in review
@@ -47,12 +48,45 @@ These were the most serious, because a broken check looked like a clean run.
 
 ## Failures left unchecked
 
-| What failed                                                                                         | What prevents it now                                         |
-| :-------------------------------------------------------------------------------------------------- | :----------------------------------------------------------- |
-| A failed setup step left a hook test running in the real repo, as `cd -- ""` succeeds and stays put | `abort_setup` and a scratch-folder guard, and `unchecked_cd` |
-| Inherited `GIT_DIR` aimed a hook test at the real repo                                              | `start_scratch` clears `git rev-parse --local-env-vars`      |
-| Global git config changed test results                                                              | `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`    |
-| Scope warnings were printed and ignored                                                             | The test runner and hook tests fail on them                  |
+| What failed                                                                                                          | What prevents it now                                                  |
+| :------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------- |
+| A failed setup step left a hook test running in the real repo, as `cd -- ""` succeeds and stays put                  | `abort_setup` and a scratch-folder guard, and `unchecked_cd`          |
+| Inherited `GIT_DIR` aimed a hook test at the real repo                                                               | `start_scratch` clears `git rev-parse --local-env-vars`               |
+| Global git config changed test results                                                                               | `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`             |
+| Scope warnings were printed and ignored                                                                              | The test runner and hook tests fail on them                           |
+| Hook tests copied all of `scripts/`, so the legacy list named files their repos lacked, and lint failed every commit | `new_scratch_repo` copies only `scripts/lint.zsh` and `scripts/lint/` |
+
+## Found in issue 2
+
+Five reviews of the coverage tool, the test runner and the import found these. Coverage rows are verified by `test/coverage.test.zsh`, and the plist and sandbox rows by the harness.
+
+| What failed                                                                                                                                                                              | What prevents it now                                                                                                                        |
+| :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
+| A line like `((waited += 1))` ended in `)`, read as a case pattern, and left the totals                                                                                                  | A line starting with `(` is always a statement                                                                                              |
+| An empty branch such as `*) ;;` counted as a line the tests missed, though the trap never fires                                                                                          | `) ;;` endings are structure                                                                                                                |
+| A real-only entry on a comment, or on a path that only ended like a traced file, passed silently                                                                                         | Each entry must name a traced path exactly, and a statement, or coverage fails                                                              |
+| Coverage ran tests without the runner's scope-warning check                                                                                                                              | Coverage runs tests through `scripts/test.zsh`                                                                                              |
+| Coverage had its own copy of lint's statement scanner                                                                                                                                    | It uses `load_views` from `scripts/lint/scan.zsh`, and joins lines ending in a pipe or `&&` itself, so lint's findings keep their own lines |
+| The launchd plist put the repo's path into XML unescaped, so `&` or `<` in a folder broke it                                                                                             | `write_plist` escapes both paths                                                                                                            |
+| An interrupted test run left its test files running, as background jobs in a script ignore SIGINT                                                                                        | `scripts/test.zsh` stops each file's whole process tree on INT or TERM, which `test/runner.test.zsh` checks                                 |
+| The runner printed a file's stdout and stderr as two blocks                                                                                                                              | Each file has one log, with stderr copied to it through multios                                                                             |
+| A `(pattern)` case line counted as a statement                                                                                                                                           | Inside a case block, a `(word)` line with nothing after it but `;;` is structure, and elsewhere it's a subshell                             |
+| Coverage would insert zsh into a non-zsh script under `bin/` or `libexec/`                                                                                                               | Only `lib/*.zsh` and files with a zsh shebang are traced                                                                                    |
+| Two harness runs at once shared one fixed sandbox and cleared each other's                                                                                                               | The harness makes its own with `mktemp`, and removes it on exit                                                                             |
+| Test files started as background jobs inherited ignored SIGINT, so their signals acted differently than when run alone                                                                   | Each job restores INT and QUIT first, which `test/runner.test.zsh` checks                                                                   |
+| A run stopped by TERM exited 130, as if interrupted                                                                                                                                      | TERM exits 143 and INT 130                                                                                                                  |
+| The runner's interrupt check could send TERM before the traps were set                                                                                                                   | It waits for the slow test file to start                                                                                                    |
+| A real-only line listed twice silently kept only the last reason                                                                                                                         | A repeated entry fails the run                                                                                                              |
+| Once scratch repos stopped copying `scripts/test.zsh`, the pre-push "bad middle commit" setup couldn't make its fix commit, so it tested a bad tip, and a symlink test linked to nothing | The fix removes the file and stops loudly if it can't commit, and the symlink points at `scripts/lint.zsh`                                  |
+| Imported comments renamed past 80 columns, with the files exempt from `line_width`                                                                                                       | Lint checks comment width in legacy files too, trailing comments included                                                                   |
+| `test_shape` flagged prose starting with a phase word, and closed a test case at any `}`                                                                                                 | Near misses count only inside a test case, and only a `}` in column 0 ends one                                                              |
+| A test function without `describe` reported failures under the previous one's unit                                                                                                       | Lint requires `describe` in each `test_*` function with test cases, unless it takes arguments as a shared case                              |
+| A coverage test case reused the previous case's scratch copy                                                                                                                             | It copies a fresh fixture                                                                                                                   |
+| A comment between two `source` lines let them go unsorted                                                                                                                                | Comment lines keep the run going                                                                                                            |
+| A test case outside a `test_*` function was reported at line 0                                                                                                                           | Only `test_*` functions need `describe`                                                                                                     |
+| The trailing-comment check flagged long legacy code with a short comment                                                                                                                 | Only a comment that starts before column 80 is measured                                                                                     |
+
+- **No lint rule added:** each is a fault in one tool's logic rather than a pattern a rule could catch.
 
 ## Why
 
@@ -66,4 +100,4 @@ These were the most serious, because a broken check looked like a clean run.
 
 ## Not verified
 
-- Nothing here has run against the imported tool, which arrives in [issue 2](https://github.com/jjloneman/pam-duo-macos-updater/issues/2).
+- The issue 1 rows were found before the tool was imported. Only the issue 2 rows have run against it.

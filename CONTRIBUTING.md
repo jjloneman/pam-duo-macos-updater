@@ -30,10 +30,17 @@ pnpm check
 
 This formats, lints and tests. CI runs the same checks on a macOS runner.
 
-The code conventions and lint rules are in [AGENTS.md](AGENTS.md), with their evidence in the [zsh scripting rules](docs/references/zsh-scripting-rules.md). Two surprises:
+```sh
+pnpm coverage
+```
+
+This runs the tests with a line tracer and prints each file's coverage. Lines only a real run can reach go in `test/real-only.txt` with a reason, rather than a faked test.
+
+The code conventions and lint rules are in [AGENTS.md](AGENTS.md), with their evidence in the [zsh scripting rules](docs/references/zsh-scripting-rules.md). Three things that may surprise you:
 
 - **The argument count is `${#}`.** The formatter corrupts the short form.
 - **A new lint rule needs a fixture,** a bad tree and a good one under `test/fixtures/lint/`.
+- **Tests read like vitest's:** `describe` and `test_case`, with `# Given -`, `# When -` and `# Then -` comments. See [AGENTS.md](AGENTS.md#-tests).
 
 ## 🔀 Pull requests
 

@@ -28,6 +28,7 @@ collect_special_names() {
 is_declaring_keyword() {
   if ((${#} != 2)); then
     print -r -- "is_declaring_keyword needs two words" >&2
+
     return 2
   fi
 
@@ -58,6 +59,7 @@ is_declaring_keyword() {
 is_real_option() {
   if ((${#} != 1)); then
     print -r -- "is_real_option needs a word" >&2
+
     return 2
   fi
 
@@ -81,6 +83,7 @@ is_real_option() {
 read_declared_names() {
   if ((${#} != 1)); then
     print -r -- "read_declared_names needs a line" >&2
+
     return 2
   fi
 
@@ -112,6 +115,7 @@ read_declared_names() {
 report_vague_name() {
   if ((${#} != 2)); then
     print -r -- "report_vague_name needs a line and a name" >&2
+
     return 2
   fi
 

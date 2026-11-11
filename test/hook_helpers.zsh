@@ -18,6 +18,7 @@ check_no_hook_warnings() {
   fi
 
   expect_equal "the hooks print no zsh warnings" "" "${warnings_text}"
+
   return 0
 }
 
@@ -29,6 +30,7 @@ git_setup() {
 
   git -c user.name=test -c user.email=test@example.com \
     -c commit.gpgsign=false "$@"
+
   return "$?"
 }
 
@@ -65,11 +67,19 @@ new_plain_repo() {
 }
 
 # Makes a repo with this repo's lint committed, and enters it.
+#
+# - Only lint is copied. All of scripts/ brought the legacy list, which names
+#   files a scratch repo doesn't have, so lint failed every commit.
 new_scratch_repo() {
   new_plain_repo
 
-  if ! cp -R -- "${REPO_ROOT}/scripts" scripts; then
-    abort_setup "could not copy scripts"
+  if ! mkdir -- scripts; then
+    abort_setup "could not make scripts"
+  fi
+
+  if ! cp -R -- "${REPO_ROOT}/scripts/lint" "${REPO_ROOT}/scripts/lint.zsh" \
+    scripts; then
+    abort_setup "could not copy lint"
   fi
 
   if ! git_setup add -- scripts; then
@@ -86,6 +96,7 @@ new_scratch_repo() {
 # Removes the scratch repos.
 remove_scratch() {
   rm -rf -- "${SCRATCH_ROOT:?}"
+
   return 0
 }
 
@@ -97,6 +108,7 @@ run_pre_commit() {
 
   run_watching_warnings /usr/bin/env PATH="${SCRATCH_ROOT}/stub:${PATH}" \
     "${REPO_ROOT}/.githooks/pre-commit"
+
   return "$?"
 }
 
@@ -145,6 +157,7 @@ start_scratch() {
 
   typeset -g SCRATCH_ROOT="${scratch_path}"
   write_stub_pnpm
+
   return 0
 }
 

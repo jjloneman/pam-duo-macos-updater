@@ -4,6 +4,37 @@ typeset -gri FILE_LINE_LIMIT=300
 typeset -gri FUNCTION_LINE_LIMIT=40
 typeset -gri LINE_WIDTH_LIMIT=80
 
+# Reports a comment that runs past 80 columns, for files exempt from
+# line_width, including one after code.
+#
+# - A comment that starts past column 80 is left alone, as the code before it
+#   is what's long, and legacy code is exempt.
+check_comment_width() {
+  local comment_text
+  local -i comment_start index
+
+  for ((index = 1; index <= ${#SOURCE_LINES}; index++)); do
+    comment_text="${COMMENT_LINES[index]:-}"
+
+    # The comment view holds only the comment, which ends the line.
+    comment_start=$((${#SOURCE_LINES[index]} - ${#comment_text}))
+
+    if [[ -z ${comment_text// /} ]]; then
+      continue
+    fi
+
+    if ((comment_start >= LINE_WIDTH_LIMIT)); then
+      continue
+    fi
+
+    if ((${#SOURCE_LINES[index]} > LINE_WIDTH_LIMIT)); then
+      report "${index}" line_width "${#SOURCE_LINES[index]} columns, over 80"
+    fi
+  done
+
+  return 0
+}
+
 # Reports whether the line before a statement lets it skip a blank line.
 #
 # - A comment belongs to what follows it, and the first statement in a block
@@ -11,6 +42,7 @@ typeset -gri LINE_WIDTH_LIMIT=80
 is_clear_above() {
   if ((${#} != 1)); then
     print -r -- "is_clear_above needs a line number" >&2
+
     return 2
   fi
 
@@ -46,6 +78,7 @@ is_clear_above() {
 is_clear_below() {
   if ((${#} != 1)); then
     print -r -- "is_clear_below needs a line" >&2
+
     return 2
   fi
 
@@ -97,6 +130,26 @@ rule_blank_before_comment() {
     if [[ -n ${COMMENT_LINES[index]:-} && -z ${code_line// /} ]]; then
       if ! is_clear_above "${index}"; then
         report "${index}" blank_before_comment "add a blank line above this"
+      fi
+    fi
+  done
+
+  return 0
+}
+
+# Requires a blank line before `return`, unless it's first in its block.
+#
+# - The same padding ESLint's padding-line-between-statements gives `return`
+#   in the owner's TypeScript repos.
+rule_blank_before_return() {
+  local -i index
+
+  for ((index = 2; index <= ${#CODE_LINES}; index++)); do
+    trim_line "${CODE_LINES[index]}"
+
+    if [[ ${TRIMMED_LINE} == return || ${TRIMMED_LINE} == "return "* ]]; then
+      if ! is_clear_above "${index}"; then
+        report "${index}" blank_before_return "add a blank line above this"
       fi
     fi
   done
