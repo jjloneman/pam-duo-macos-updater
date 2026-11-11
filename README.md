@@ -37,6 +37,7 @@ These describe the code imported in [issue 2](https://github.com/jjloneman/pam-d
 - **PAM:** [Pluggable Authentication Modules](https://en.wikipedia.org/wiki/Pluggable_authentication_module) are the plug-ins macOS uses to decide whether a login or `sudo` is allowed. A file under `/etc/pam.d` lists which modules each service asks.
 - **Duo:** [Duo](https://duo.com/product/multi-factor-authentication-mfa) is Cisco's two-factor authentication service, which sends an approval to your phone. [Duo Unix](https://duo.com/docs/duounix) includes `pam_duo`, the module that lets PAM ask Duo.
 - **Together:** with `pam_duo` listed for `sudo`, you can approve `sudo` from your phone instead of typing your password.
+- **Why not another authenticator:** code apps such as Google Authenticator mean typing a code, Microsoft Authenticator's push needs a work account, and Touch ID or a security key needs you at the Mac. See [why Duo](docs/decisions/why-duo.md).
 
 A setup like this is hard to keep safe by hand, which is the gap this tool fills:
 
