@@ -11,7 +11,7 @@ A zsh tool that keeps a self-built Duo PAM module patched on macOS, with a two-a
 
 ## 🗂️ Project layout
 
-- `bin/pam-duo-macos-updater`: the script the user runs, and `libexec/pam-duo-macos-updater-root`: the self-contained helper root runs. Both are imported code, still in their earlier style.
+- `bin/pam-duo-macos-updater`: the script the user runs, still imported code in its earlier style, and `libexec/pam-duo-macos-updater-root`: the self-contained helper root runs.
 - `scripts/lint.zsh`: the lint entry point, with its rules under `scripts/lint/`.
 - `scripts/coverage.zsh`: the coverage tracer, with its line reading in `scripts/coverage/`.
 - `scripts/test.zsh`: runs the named test files, or every `test/*.test.zsh`, side by side, printing each one's output in order. Test files must not share writable state.
@@ -31,7 +31,7 @@ Planned, per issue 1: `lib/`, which issue 3 splits the script into.
 - **Entry points** start with `#!/bin/zsh -f` and the standard header. Sourced files have no shebang and no execute bit.
 - **Names:** functions read as what they do, booleans as questions starting with `are`, `can`, `did`, `does`, `has`, `have`, `is`, `should`, `was`, `were` or `will` (`is_helper_current`), constants are `SCREAMING_SNAKE_CASE`, and functions and locals are `snake_case`. No `data`, `tmp`, `obj`, `val` or `res`.
 - **Order:** functions, constants, `case` branches and runs of `source` lines are sorted, ignoring case, with `main` and a `case` catch-all last. Where order carries meaning, an `# Order:` comment directly above says why, and lint accepts it.
-- **Shape:** 80 columns, 300 lines per file and 40 per function, a doc comment on every function, and an explicit `return`.
+- **Shape:** 80 columns, 300 lines per file (450 for the helper, which must stay one file) and 40 per function, a doc comment on every function, and an explicit `return`.
 - **Spacing:** a blank line around multi-line statements, and before comments and `return`, unless first in the block.
 - **Comments:** a comment of three lines or more opens with a sentence, then `-` bullets. Bullets may sit together when each fits on one line; once any wraps, a blank `#` line separates every bullet.
 - **Branches:** every branch is an `if`, because the coverage tracer can't see inside `&&` or `||`. `[[ ]]` and `(( ))` may use them internally.
@@ -82,6 +82,7 @@ Test files follow the owner's vitest shape, which lint's `test_shape` rule check
 - **`pnpm coverage`** traces the tests and prints line coverage for `bin/`, `lib/` and `libexec/`. Lines only a real run can reach go in `test/real-only.txt` as `path:line: reason`, and an entry the tests run fails it.
   - It traces `lib/*.zsh` and files under `bin/` and `libexec/` with a zsh shebang. It inserts a `DEBUG` trap as line 2 of each and counts lines one lower, so line 1 must be a shebang or a comment.
   - Code run through `zsh -c` from a copied file isn't traced, which issue 4 fixes for the harness.
+  - The `DEBUG` trap doesn't fire inside a signal trap's handler, so a function only a signal runs, such as the helper's `restore_and_exit`, shows as missed even when a test sends that signal. A probe's `HUP` handler ran and exited 4, and none of its lines were traced (tested 2026-11-11).
 - **Never bypass hooks** with `--no-verify` without the owner's approval.
 
 ## 📝 OKF records

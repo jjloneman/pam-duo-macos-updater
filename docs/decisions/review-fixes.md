@@ -98,6 +98,16 @@ A docs-only PR's CI run failed two harness checks, which passed on re-run.
 
 - **An `AGENTS.md` trap line was added** rather than a lint rule, because whether a wait proves a trap is set needs reading the code it waits on.
 
+## Found in issue 17
+
+Converting the helper took it off the legacy list, and `pnpm coverage` then failed although `pnpm check` passed.
+
+| What failed                                                                                                                                                                                  | What prevents it now                                                                           | Verified by                                                                                              |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------- |
+| Lint's test of the repo linted the traced scratch copy, where coverage inserts a 267-column trap as line 2 of each file, so the first converted file failed `line_width` only under coverage | Coverage exports `COVERAGE_REPO_ROOT`, and that test lints the untraced original when it's set | `pnpm coverage` failed on the converted helper before the change and passed after it (tested 2026-11-11) |
+
+- **No lint rule added:** it was the test's choice of folder, not a pattern in the code.
+
 ## Why
 
 - **Lint and tests are what the rest of this project trusts,** so a false pass costs more than a false alarm.

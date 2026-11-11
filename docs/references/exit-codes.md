@@ -14,9 +14,9 @@ Read from the code imported in issue 2, on 2026-11-10 (Inference, from reading t
 
 ## The helper
 
-`libexec/pam-duo-macos-updater-root` runs as root, through `sudo`, and swaps in a verified module. Its exit status says what happened to the installed module. **These numbers don't change**, because the script reads them, and a later rename only gives them names.
+`libexec/pam-duo-macos-updater-root` runs as root, through `sudo`, and swaps in a verified module. Its exit status says what happened to the installed module. **These numbers don't change**, because the script reads them. The helper names them with `EXIT_*` constants.
 
-| Status | Name, from issue 3           | The module afterwards               | When                                                                                                                |
+| Status | Name                         | The module afterwards               | When                                                                                                                |
 | -----: | :--------------------------- | :---------------------------------- | :------------------------------------------------------------------------------------------------------------------ |
 |    `0` | `EXIT_PROVEN`                | The new one, proven                 | A Duo approval arrived through the new module before the timeout.                                                   |
 |    `2` | `EXIT_REFUSED`               | Untouched                           | It refused before the swap: bad arguments, not root, the lock held, an unsafe config, no module, or a changed file. |
