@@ -3,8 +3,9 @@ type: Decision
 title: Why Duo
 description: It uses Duo because its phone push approves sudo from anywhere for free, while other authenticators need a typed code, a work account, or someone at the Mac.
 tags: [duo, pam, sudo, alternatives]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-11T06:13:17Z }
+verified: { by: human:jjloneman, at: 2026-11-11T06:20:35Z }
 sources:
   - id: duo-free
     resource: https://duo.com/pricing/duo-free
