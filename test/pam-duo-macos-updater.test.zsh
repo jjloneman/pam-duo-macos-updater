@@ -563,10 +563,29 @@ set_perms
 new_module
 env -i HOME="$SANDBOX/home" PATH="$SANDBOX/shims:/usr/bin:/bin:/usr/sbin:/sbin" SANDBOX="$SANDBOX" "$SANDBOX/libexec/pam-duo-macos-updater-root" "$SANDBOX/new-module" "$(shasum -a 256 "$SANDBOX/new-module" | cut -d ' ' -f 1)" run.2 > "$SANDBOX/signal.log" 2>&1 &
 signal_pid=$!
-for ((i = 0; i < 20; i++)); do
-  [[ -e $SANDBOX/fake/run/swapped ]] && break
+
+# Wait until the marker holds this run's ID, which the helper writes only
+# after its trap is set and the new module is in place.
+#
+# - This once waited only for the marker to exist, but the helper writes it
+#   as "pending" before both, so CI sometimes compared too early and sent HUP
+#   before the trap, which killed the helper with 129 rather than 4 (#15).
+#
+# - The deadline is generous for slow runners, and the wait stops early if
+#   the helper has exited, so a broken helper fails here rather than hanging.
+#
+# - Verified by stalling the helper after writing "pending", which failed the
+#   old wait every time and passes this one.
+reached_wait=0
+for ((i = 0; i < 300; i++)); do
+  [[ $(< "$SANDBOX/fake/run/swapped") == run.2 ]] 2> /dev/null && {
+    reached_wait=1
+    break
+  }
+  kill -0 $signal_pid 2> /dev/null || break
   sleep 0.1
 done
+expect 'closing terminal: helper reached the wait' test $reached_wait = 1
 expect 'closing terminal: new module was swapped in first' cmp -s "$SANDBOX/new-module" "$SANDBOX/fake/lib/pam_duo.so"
 kill -HUP $signal_pid
 wait $signal_pid
