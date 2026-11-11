@@ -3,7 +3,7 @@
 Keeps a self-built [Duo](https://duo.com/docs/duounix) [PAM](https://en.wikipedia.org/wiki/Pluggable_authentication_module) module (`pam_duo`) patched on macOS, with a two-approval proof and rollback. New to these? See [what PAM and Duo are, and why this exists](#-what-pam-and-duo-are-and-why-this-exists).
 
 - **Unofficial:** this project is not affiliated with Duo or Cisco.
-- **Not ready for use yet:** as of 2026-11-06 the code hasn't been imported, so there's nothing to install or run.
+- **Not ready for use yet:** as of 2026-11-10 the code is imported, unchanged in behavior, but hasn't been run for real from this repo. Don't install it.
 - **It changes who can become root:** the tool replaces a module that `sudo` loads, so a mistake or a tampered build can break `sudo` or weaken it. Read [the limits and risks](#-limits-and-risks) first.
 
 ## 📖 Table of contents
@@ -11,7 +11,8 @@ Keeps a self-built [Duo](https://duo.com/docs/duounix) [PAM](https://en.wikipedi
 - [🚨 Limits and risks](#-limits-and-risks)
 - [💡 What PAM and Duo are, and why this exists](#-what-pam-and-duo-are-and-why-this-exists)
 - [📦 Status](#-status)
-- [🧭 What the tool will do](#-what-the-tool-will-do)
+- [🧭 What the tool does](#-what-the-tool-does)
+- [🗂️ Where it keeps things](#️-where-it-keeps-things)
 - [🧪 What has been tested](#-what-has-been-tested)
 - [🧰 Development](#-development)
 - [📚 Docs](#-docs)
@@ -21,7 +22,7 @@ Keeps a self-built [Duo](https://duo.com/docs/duounix) [PAM](https://en.wikipedi
 
 ## 🚨 Limits and risks
 
-These describe the plan for the code arriving in [issue 2](https://github.com/jjloneman/pam-duo-macos-updater/issues/2), and the setup it comes from.
+These describe the code imported in [issue 2](https://github.com/jjloneman/pam-duo-macos-updater/issues/2), and the setup it comes from.
 
 - **macOS isn't a platform Duo lists.** As of 2026-11-06, Duo's Unix page names Linux, BSD, Solaris and AIX as tested, not macOS ([Duo Unix docs](https://duo.com/docs/duounix)). You'd be on your own, with no vendor support for this setup.
 - **An approved push stands in for your password.** A denied push, or Duo being unreachable, falls through to the normal password prompt. That only holds with `failmode = secure`: Duo's default is `safe`, which allows access on a service or configuration error.
@@ -45,17 +46,17 @@ A setup like this is hard to keep safe by hand, which is the gap this tool fills
 
 ## 📦 Status
 
-As of 2026-11-06:
+As of 2026-11-10:
 
-- **In this repo:** the license, these docs, the formatter and lint tooling, CI, and the first [draft records](docs/decisions/index.md).
-- **Not in this repo yet:** the tool, its root helper and its tests. [Issue 2](https://github.com/jjloneman/pam-duo-macos-updater/issues/2) imports them from a private location, with a clean history.
-- **There are no install steps,** because there's nothing to install. This section will say when that changes.
+- **In this repo:** the tool, its root helper and their tests, imported with no change in behavior and with a clean history. Also the license, these docs, the formatter, lint and coverage tooling, CI, and [draft records](docs/decisions/index.md).
+- **Not converted yet:** the imported files keep their earlier style, listed in `scripts/lint-legacy.txt`, until [issue 3](https://github.com/jjloneman/pam-duo-macos-updater/issues/3) splits them into modules.
+- **There are no install steps,** because it hasn't been run for real from this repo. This section will say when that changes.
 
 The full plan, in seven steps, is in [issue 1](https://github.com/jjloneman/pam-duo-macos-updater/issues/1).
 
-## 🧭 What the tool will do
+## 🧭 What the tool does
 
-This is the plan for the imported code, not a description of anything you can run today.
+This describes the imported code. It isn't ready for anyone to install yet.
 
 - **Daily check:** reads the versions out of the installed module, compares them with published releases, and sends an alert when a release is ready or anything fails.
 - **Waiting period:** a release must be 7 days old before it's used.
@@ -63,9 +64,25 @@ This is the plan for the imported code, not a description of anything you can ru
 - **Verify:** rejects a build unless it links only `/usr/lib` libraries, has no user-writable paths built in, reports the expected versions, exports `pam_sm_authenticate`, and really loads.
 - **Install, with two approvals:** one to start a root-owned helper that swaps the module, and one to prove the new module approves `sudo`. No proof within 3 minutes restores the old module. See [why the install takes two approvals](docs/decisions/two-approvals.md) and [why the helper is root-owned](docs/decisions/root-owned-helper.md).
 
+## 🗂️ Where it keeps things
+
+| What                     | Where                                                            |
+| :----------------------- | :--------------------------------------------------------------- |
+| The script               | `bin/pam-duo-macos-updater`, run from this repo                  |
+| The root-owned helper    | `/usr/local/libexec/pam-duo-macos-updater-root`                  |
+| The module it updates    | `/usr/local/lib/pam/pam_duo.so`                                  |
+| State and alert markers  | `~/.local/state/pam-duo-macos-updater/`                          |
+| Logs                     | `~/Library/Logs/pam-duo-macos-updater/`                          |
+| The ntfy topic, one line | `~/.config/pam-duo-macos-updater/ntfy-topic`                     |
+| The daily launchd job    | `io.github.jjloneman.pam-duo-macos-updater-check`                |
+| Install markers and lock | `/var/run/pam-duo-macos-updater-*`, `pam-duo-macos-updater.lock` |
+
+- **The topic is required:** without it, the daily check fails rather than staying quiet. Keep it out of anything public, since anyone with it can read the alerts.
+- **Exit codes** are in [the exit codes record](docs/references/exit-codes.md).
+
 ## 🧪 What has been tested
 
-Real runs, with real root and real Duo, used the earlier script this repo will import, not code from this repo. On 2026-11-06, on one Mac, with duo_unix 2.3.0 and OpenSSL 3.5.9:
+Real runs, with real root and real Duo, used the earlier script this repo imported, not code from this repo. On 2026-11-06, on one Mac, with duo_unix 2.3.0 and OpenSSL 3.5.9:
 
 - **Passed:**
   - An approved install.
@@ -84,11 +101,13 @@ You need Node and pnpm for the formatter and Changesets. The tool itself won't n
 pnpm install
 pnpm check
 pnpm test
+pnpm coverage
 ```
 
 - **`pnpm install`** installs the formatter and Changesets, and turns on the git hooks.
 - **`pnpm check`** formats, lints and tests.
 - **`pnpm test`** runs the tests on their own.
+- **`pnpm coverage`** runs the tests with a line tracer, and prints each file's coverage and missed lines.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the rest of the setup.
 
@@ -97,7 +116,7 @@ pnpm test
 Records are [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundles. Everything is an agent-written draft until its owner signs it off.
 
 - [docs/decisions/](docs/decisions/index.md): why it's built the way it is.
-- [docs/references/](docs/references/index.md): facts, including the [zsh scripting rules](docs/references/zsh-scripting-rules.md).
+- [docs/references/](docs/references/index.md): facts, including the [exit codes](docs/references/exit-codes.md) and the [zsh scripting rules](docs/references/zsh-scripting-rules.md).
 - [docs/playbooks/](docs/playbooks/index.md): procedures, none yet.
 
 ## 🔒 Security

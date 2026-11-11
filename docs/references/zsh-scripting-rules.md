@@ -3,8 +3,9 @@ type: Reference
 title: Zsh scripting rules
 description: Every code and lint rule this repo uses for zsh, each marked Tested, Source or Inference with its date, plus which linters support zsh.
 tags: [linting, shell, zsh]
-status: draft
+status: stable
 generated: { by: claude-code/claude-opus-5-5, at: 2026-11-07T03:20:57Z }
+verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
 sources:
   - id: chazelas-arith
     resource: https://www.zsh.org/mla/workers/2021/msg01243.html
@@ -197,11 +198,12 @@ hash -r
 
 These are project choices, not consensus (Inference, 2026-11-06). Google's guide is the closest published style, and it's for Bash [google-shell].
 
-- **Semantic names:** functions read as what they do, booleans as questions, constants are `SCREAMING_SNAKE_CASE`, functions and locals are `snake_case`, and vague names such as `data`, `tmp`, `obj`, `val` and `res` are banned outside trivial scopes.
+- **Semantic names:** functions read as what they do, booleans as questions starting with `are`, `can`, `did`, `does`, `has`, `have`, `is`, `should`, `was`, `were` or `will`, as the owner's TypeScript repos enforce, constants are `SCREAMING_SNAKE_CASE`, functions and locals are `snake_case`, and vague names such as `data`, `tmp`, `obj`, `val` and `res` are banned outside trivial scopes.
 - **Named exit codes:** `EXIT_PROVEN`, `EXIT_REFUSED`, `EXIT_RESTORED`, `EXIT_RESTORED_AFTER_SIGNAL`, `EXIT_RESTORE_FAILED`, keeping their numbers.
-- **Lexicographic order, ignoring case:** constants, functions, array entries, `case` branches, `setopt` lists, plist keys and test helpers. `main` goes last, above the call that runs it, and a `case` catch-all goes last. Where order carries meaning, a comment above says why.
-- **Spacing:** 80 columns, one blank line between functions, a blank line around every multi-line statement, and a blank line before a comment unless it's first in its block.
-- **Comments:** one of three lines or more opens with a prose sentence, then `-` bullets separated by blank `#` lines. Every function has a doc comment.
+- **Lexicographic order, ignoring case:** constants, functions, array entries, `case` branches, runs of `source` lines, `setopt` lists, plist keys and test helpers. `main` goes last, above the call that runs it, and a `case` catch-all goes last. Where order carries meaning, a comment above says why.
+- **Spacing:** 80 columns, one blank line between functions, a blank line around every multi-line statement, and a blank line before a comment or `return` unless it's first in its block. The `return` padding matches ESLint's `padding-line-between-statements` in the owner's TypeScript repos.
+- **Comments:** one of three lines or more opens with a prose sentence, then `-` bullets. Bullets may sit together when each fits on one line; once any wraps, a blank `#` line separates every bullet. Every function has a doc comment.
+- **Tests:** `describe "<unit>"` and `test_case "<scenario>"`, with `# Given -`, `# When -` and `# Then -` phase comments, the shape of the owner's vitest tests.
 - **Limits:** 300 lines per file and 40 per function, as proposed in issue 1.
 - **No short forms, `function` or backticks:** Google says `$(command)` over backticks, and that `function` is extraneous with `()` [google-shell] (Source). `+o shortloops` rejected `for i in 1; print $i`, but accepted `if [[ a == a ]] { print x }` and `for i (1) { print $i }`, so lint must catch those (Tested).
 
@@ -227,12 +229,15 @@ These are project choices, not consensus (Inference, 2026-11-06). Google's guide
   - It accepted a misspelled command, `mapfile`, an unset name, a bad `setopt` name, and `${x,,}` inside a function or `if`.
 - **Banned vague names, and undeclared variables through `warn_create_global`** ([Code shape](#code-shape), [Functions](#functions)).
 - **Every branch is an `if`:** a `DEBUG` trap fired once for `false && print never`, so the line would count as covered though `print` never ran. An `if` body fired on its own line when it ran, and didn't when it was skipped (Tested). It can't see the empty false side of an `if`, so tests assert those (Inference).
+- **A blank line before `return`, and sorted runs of `source` lines** ([Code shape](#code-shape)).
+- **Test files name a unit and mark each test case's When and Then** ([Code shape](#code-shape)).
 - **OKF frontmatter is present, and every record is listed in its `index.md`** (Inference, keeps the bundles usable).
 - **Temporary exemption:** files in `scripts/lint-legacy.txt` skip the style rules until issues 3 and 4 convert them, and an entry naming a missing file fails lint. The list and its code are deleted at the end of issue 4 (Inference).
 
 Left to review, because a script can't judge them (Inference):
 
 - Whether a name really describes its value.
+- Whether a boolean's name starts with a question word.
 - Whether a failure-modes table is complete.
 - Whether a value was checked before reaching `(( ))`, which the fault sweep tests too.
 
