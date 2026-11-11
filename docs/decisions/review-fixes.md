@@ -4,8 +4,8 @@ title: Fixes found in review
 description: What code reviews and the owner's review found wrong in this repo's lint, test and coverage tooling, what prevents each now, and how that's verified, so similar work can fail faster.
 tags: [linting, review, testing, zsh]
 status: stable
-generated: { by: claude-code/claude-opus-5-5, at: 2026-11-09T21:00:00Z }
-verified: { by: human:jjloneman, at: 2026-11-11T05:54:03Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-11T06:48:05Z }
+verified: { by: human:jjloneman, at: 2026-11-11T06:49:46Z }
 ---
 
 # Fixes found in review
@@ -88,6 +88,16 @@ Five reviews of the coverage tool, the test runner and the import found these. C
 
 - **No lint rule added:** each is a fault in one tool's logic rather than a pattern a rule could catch.
 
+## Found in issue 15
+
+A docs-only PR's CI run failed two harness checks, which passed on re-run.
+
+| What failed                                                                                                                                                                                                                                   | What prevents it now                                                                                                       | Verified by                                                                                                                                                       |
+| :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The closing-terminal case waited only for the swapped marker to exist, but the helper writes it as `pending` before setting its trap and moving the module in, so CI compared too early and sent `HUP` that killed the helper with 129, not 4 | The case waits, for up to 30 seconds, until the marker holds this run's ID, and checks that it got there before signalling | Stalling the helper after `pending` failed the old wait every time and passes the new one, and 60 runs side by side under CPU load all passed (tested 2026-11-11) |
+
+- **An `AGENTS.md` trap line was added** rather than a lint rule, because whether a wait proves a trap is set needs reading the code it waits on.
+
 ## Why
 
 - **Lint and tests are what the rest of this project trusts,** so a false pass costs more than a false alarm.
@@ -100,4 +110,4 @@ Five reviews of the coverage tool, the test runner and the import found these. C
 
 ## Not verified
 
-- The issue 1 rows were found before the tool was imported. Only the issue 2 rows have run against it.
+- The issue 1 rows were found before the tool was imported. Only the issue 2 and issue 15 rows have run against it.

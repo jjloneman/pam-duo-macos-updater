@@ -47,6 +47,7 @@ Planned, per issue 1: `lib/`, which issue 3 splits the script into.
 - **`$'\n'` doesn't expand inside double quotes.** Put it in a constant.
 - **The formatter can't parse all valid zsh.** It rejected `${~name}`, glob subscripts such as `${(k)a[(R)*x*]}`, and some `[[ ]]` alternations with escaped parentheses. Rewrite the form, and never exclude the file.
 - **`warn_nested_var` fires on assigning a global from a function.** Use `typeset -g` on each assignment.
+- **Before signalling a process in a test, wait for proof its trap is set,** not for an earlier marker or a fixed sleep. The harness once sent `HUP` while the helper's marker still read `pending`, so CI saw 129 rather than 4.
 
 ## 🧾 Documenting fixes
 
