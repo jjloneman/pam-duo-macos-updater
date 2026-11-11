@@ -55,8 +55,8 @@ readonly DUO_CONFIG=/etc/duo/pam_duo.conf
 readonly LOCK_FILE=/var/run/pam-duo-macos-updater.lock
 
 # The installed module, and the last one proven to work.
-readonly MODULE_PATH=/usr/local/lib/pam/pam_duo.so
-readonly PREVIOUS_MODULE_PATH=$MODULE_PATH.previous
+readonly PAM_MODULE_PATH=/usr/local/lib/pam/pam_duo.so
+readonly PREVIOUS_PAM_MODULE_PATH=$PAM_MODULE_PATH.previous
 
 # OpenSSL's config directory, built into the module.
 readonly OPENSSL_DIRECTORY=/etc/duo/ssl
@@ -95,7 +95,7 @@ config_is_safe() {
   # A module that isn't turned on couldn't be proven by sudo; a commented-out
   # line doesn't count, and -F treats the path as plain text.
   if ! grep -v '^[[:space:]]*#' "$PAM_CONFIG" \
-    | grep -F "$MODULE_PATH" > /dev/null; then
+    | grep -F "$PAM_MODULE_PATH" > /dev/null; then
     print -r -u2 -- "Duo isn't turned on in $PAM_CONFIG"
     return 1
   fi
@@ -104,8 +104,8 @@ config_is_safe() {
 # Put back the last proven module, and clear the markers.
 restore_previous() {
   # Copy then rename, so sudo never sees a half-written file.
-  if ! cp -p "$PREVIOUS_MODULE_PATH" "$MODULE_PATH.new" \
-    || ! mv -f "$MODULE_PATH.new" "$MODULE_PATH"; then
+  if ! cp -p "$PREVIOUS_PAM_MODULE_PATH" "$PAM_MODULE_PATH.new" \
+    || ! mv -f "$PAM_MODULE_PATH.new" "$PAM_MODULE_PATH"; then
     # Leave the swapped marker, so the daily check alerts and the next run
     # tries again.
     print -r -u2 -- "RESTORE FAILED: test sudo, and see the playbook's undo"
@@ -144,8 +144,8 @@ swap_and_prove() {
   config_is_safe || return 2
 
   # This is only for updating a module, so there must be one to restore.
-  if [[ ! -e $MODULE_PATH ]]; then
-    print -r -u2 -- "$MODULE_PATH is missing; see the playbook"
+  if [[ ! -e $PAM_MODULE_PATH ]]; then
+    print -r -u2 -- "$PAM_MODULE_PATH is missing; see the playbook"
     return 2
   fi
 
@@ -161,18 +161,18 @@ swap_and_prove() {
 
   # Copy it somewhere only root can write, then check that copy, so it can't
   # change between the check and the swap.
-  install -o root -g wheel -m 755 "$source_module" "$MODULE_PATH.new" \
+  install -o root -g wheel -m 755 "$source_module" "$PAM_MODULE_PATH.new" \
     || return 2
   local actual_checksum
-  actual_checksum=$(shasum -a 256 "$MODULE_PATH.new" | cut -d ' ' -f 1)
+  actual_checksum=$(shasum -a 256 "$PAM_MODULE_PATH.new" | cut -d ' ' -f 1)
   if [[ $actual_checksum != "$expected_checksum" ]]; then
-    rm -f "$MODULE_PATH.new"
+    rm -f "$PAM_MODULE_PATH.new"
     print -r -u2 -- "$source_module changed since it was verified"
     return 2
   fi
 
   # Keep the working module; -p preserves its owner and mode.
-  cp -p "$MODULE_PATH" "$PREVIOUS_MODULE_PATH" || return 2
+  cp -p "$PAM_MODULE_PATH" "$PREVIOUS_PAM_MODULE_PATH" || return 2
 
   # Mark the swap first, so no moment exists where an unproven module is live
   # with no marker.
@@ -182,7 +182,7 @@ swap_and_prove() {
   trap 'restore_previous && exit 4; exit 5' HUP INT TERM
 
   # Swap it in; rename is atomic, so sudo sees one module or the other.
-  if ! mv -f "$MODULE_PATH.new" "$MODULE_PATH"; then
+  if ! mv -f "$PAM_MODULE_PATH.new" "$PAM_MODULE_PATH"; then
     trap - HUP INT TERM
     rm -f "$SWAPPED_FLAG"
     print -r -u2 -- "couldn't move the new module into place"

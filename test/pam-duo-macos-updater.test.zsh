@@ -108,7 +108,7 @@ setup() {
     exit 1
   fi
   sed -E \
-    -e "s#^readonly MODULE_PATH=.*#readonly MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
+    -e "s#^readonly PAM_MODULE_PATH=.*#readonly PAM_MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
     -e "s#^readonly CONFIRMED_FLAG=.*#readonly CONFIRMED_FLAG=$SANDBOX/fake/run/confirmed#" \
     -e "s#^readonly SWAPPED_FLAG=.*#readonly SWAPPED_FLAG=$SANDBOX/fake/run/swapped#" \
     -e "s#^readonly HELPER_PATH=.*#readonly HELPER_PATH=$SANDBOX/libexec/pam-duo-macos-updater-root#" \
@@ -118,7 +118,7 @@ setup() {
     -e 's#\[\[ ! -t 0 \]\]#[[ -n ${FORCE_NO_TTY:-} ]]#' \
     "$SOURCE" > "$SANDBOX/pam-duo-macos-updater"
   sed -E \
-    -e "s#^readonly MODULE_PATH=.*#readonly MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
+    -e "s#^readonly PAM_MODULE_PATH=.*#readonly PAM_MODULE_PATH=$SANDBOX/fake/lib/pam_duo.so#" \
     -e "s#^readonly CONFIRMED_FLAG=.*#readonly CONFIRMED_FLAG=$SANDBOX/fake/run/confirmed#" \
     -e "s#^readonly SWAPPED_FLAG=.*#readonly SWAPPED_FLAG=$SANDBOX/fake/run/swapped#" \
     -e "s#^readonly DUO_CONFIG=.*#readonly DUO_CONFIG=$SANDBOX/fake/etc/pam_duo.conf#" \
