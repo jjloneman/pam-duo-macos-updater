@@ -4,7 +4,7 @@ description: Installs pnpm, Node, and the frozen-lockfile dependency tree, the p
 runs:
   using: composite
   steps:
-    - uses: pnpm/action-setup@v6.1.0
+    - uses: pnpm/action-setup@v6.1.1
       with:
         cache: true
 
