@@ -1,6 +1,6 @@
 {
   "name": "pam-duo-macos-updater",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "🔐 Keeps a self-built Duo PAM module patched on macOS, with a two-approval proof and rollback. Unofficial.",
   "homepage": "https://github.com/jjloneman/pam-duo-macos-updater#readme",
